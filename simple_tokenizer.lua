@@ -153,14 +153,14 @@ ascii_tok[('-'):byte(1)]=function(str,x,y,file_pos)
       if l then 
         local indent,lines_down
           str,indent,lines_down=nlcr_process(str:sub(file_pos,l-1),x)
-        return indent,y+lines_down,l,'Ignore',str,str 
+        return indent,y+lines_down,l,'Comment',str,str 
       end
       l = str:match("^%[=*%[[^\n\r]*",file_pos+2) 
       if l then return x+#l,y,file_pos+#l,'Error',l,'unfinished long commment' end 
       l=str:match("^[^\n\r]*[\n\r]*",file_pos)
       local indent,lines_down
       str,indent,lines_down=nlcr_process(l,x)
-      return 0,y+(lines_down or 1),file_pos+#l,'Ignore',str,str
+      return 0,y+(lines_down or 1),file_pos+#l,'Comment',str,str
    end
   return x+1,y,file_pos+1,'Atom', '-' ,'-'  
 end
@@ -244,14 +244,16 @@ end
 local token_types = { 
   'Error',
     --
+    'Id',
     'Atom',
     --
+    'Comment',
     'Ignore',
     --
     'Number',
     'String',
 }
-local not_meaningful={Ignore=true}
+local not_meaningful={Ignore=true, Comment=true}
 
 
 local function meaningful_tokenize(str,x,y,file_pos)

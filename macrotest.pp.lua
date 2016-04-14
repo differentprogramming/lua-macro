@@ -1,4 +1,7 @@
+local function foo(a,b)
+  @ a*b
+end
 
-local amb j = (1+1,2+2,3+3,4+4,5+5,6+6)
+local amb j = (1+foo(2,5),2+20,3+30,4+40,5+50)
   print(j)
 endamb
