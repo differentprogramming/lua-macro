@@ -394,30 +394,7 @@ local function sublist_to_string(s)
 end
 
 local macros=
-{
-    {{'&'},
-      '&(?...A,?()...B)', 
-      [[
-        for %i in ?A do
-          if %i ~=nil then 
-            for %j in ?B do
-              if %j ~=nil then y@(?i,?j)
-              end
-            end
-          end
-        end
-      ]]},
-    {{'|'},
-      '|(?,...A,?()...B)', 
-      [[
-        for %i in ?A do
-          Y@(%i)
-        end
-        for %i in ?B do
-          Y@(%i)
-        end
-      ]]}
-      
+{      
 }
 
 local function validate_params(head)
