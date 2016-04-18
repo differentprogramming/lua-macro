@@ -1,5 +1,25 @@
+--[[
+debug.setmetatable(nil, {
+    __index = function(t, i)
+        return nil
+    end
+})
+--]]
+--[[Things to add
+top level macros, or top parts to macro
+bottom, export
+other file
+execute
+
+macro phases?
+inner info?
+]]
 tokenizer=require 'simple_tokenizer'
 require 'class'
+
+--forward references
+local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
+local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward
 simple_translate = setmetatable(
   { ['[|']='function (',
     ['{|']='coroutine.wrap(function (',
@@ -18,12 +38,67 @@ simple_translate = setmetatable(
     ['$6']='select(6,...)',
   }, { __index = function(_,v) return v end })
 
+tokenizer.add_special_token('#start')
+tokenizer.add_special_token('#end')
+
+tokenizer.add_special_token('#macro') --match {}
+tokenizer.add_special_token('#if') 
+tokenizer.add_special_token('#elseif') 
+tokenizer.add_special_token('#else') 
+tokenizer.add_special_token('#endif') 
+tokenizer.add_special_token('#section') 
+tokenizer.add_special_token('#fileout') 
+tokenizer.add_special_token('#require') 
+tokenizer.add_special_token('#define') 
+tokenizer.add_special_token('#apply') 
+
+--macros as first class at expand time
+--[==[
+ #macro{
+  new_tokens={'WHILE','DO','END','BREAK','CONTINUE'},
+  head='WHILE ?()...exp DO ?,...statements END',
+  body=[[
+  local function %loop() 
+    if ?exp then
+      #apply({{head='BREAK',body='return("__*done*__")'},
+      {head='CONTINUE',body='return %loop()'},}, ?statements)
+      return %loop()
+    end
+    return '__*done*__'
+  end
+  local %save=table.pack(%loop())
+  if %save[1]~='__*done*__' then return table.unpack(%save,%save.n) end
+  
+local fn,err= loadstring(process([[
+  local i,j
+  i=1 
+  WHILE i<=6 DO
+    j=10
+    if i==3 then CONTINUE end
+    if i==5 then BREAK end
+    WHILE j<=60 DO
+      if j==30 then CONTINUE end
+      if j==50 then BREAK end
+      print(i,j) 
+      --I should test return too
+      j=j+10
+    END
+    i=i+1
+  END
+  ]]))
+  fn()
+}
+
+--]==]
+
+
 local function add_token_keys(t)
   for k,_ in pairs(t) do
     tokenizer.add_special_token(k)
   end
 end
 local function add_tokens(t)
+  if not t then return end
   for _,v in ipairs(t) do
     tokenizer.add_special_token(v)
   end
@@ -80,8 +155,62 @@ local macro_params={
   --generate var
   ['%']='generate var',
 --  ['%external-load:']='global load', -- also need a 4th entry for saving
+  ['#apply']='apply macros'
 }
 
+local function skip_one(l)
+  if not nullp(l) then return cdr(l) end
+  return l
+end
+
+local function skip_apply(l, store)
+  l=cdr(l)
+  if car(l).macro_token ~='(' then error '( expected after #apply ' end
+  l=cdr(l)
+  local ret
+  local where_struct_goes = l
+  if (store) then 
+    if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then error( 'array of macros expected after #apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
+    local s,nl
+    s,nl=read_match_to(l,',')
+    if not s then error 'array of macros expected after #apply (' end
+    if nullp(nl) or car(nl).macro_token ~=',' then error ', expected after #apply({macros...} ' end
+    ret = strip_tokens_from_list(sublist_to_list( {l,nl},1 ))
+    l=cdr(nl);
+    --concat_cons(ret,' ');
+   where_struct_goes[2]={}
+   local temp_macros = loadstring('return('..concat_cons(ret,' ')..')')();
+   for i = 1,#temp_macros do
+     add_macro(temp_macros[i],where_struct_goes[2])
+   end
+   where_struct_goes[3]=l
+  else
+    l=cdr(l)
+  end
+  
+  if nullp(l) or not macro_params[car(l).macro_token] then error ('parameter expected after #apply({macros...}, got '.. car(l).macro_token ..' instead') end
+  l=cdr(l)
+  if nullp(l) or car(l).type~='Id' then error ('Id expected after #apply({macros...}, got '.. car(l).macro_token..' type = "'.. tostring( car(l).type) ..'" instead') end
+  l=cdr(l)
+  if nullp(l) or car(l).macro_token ~=')' then error ') expected after #apply({macros...},?Id' end
+  return cdr(l),where_struct_goes[2],caddr(where_struct_goes)
+end
+
+local skip_param_tokens={
+    ['param']=skip_one,
+  --input matches till
+    ['param until']=skip_one,
+  --input matches till next, also matches () {} [] - stops for comma
+  --if the expected next is a comma then that matches
+  --if the expected next is not a comma and it finds one, that's a failure
+  ['param match until']=skip_one,
+  --in matches any number of elements including commas
+  ['params']=skip_one,
+  --generate var
+  ['generate var']=skip_one,
+--  ['%external-load:']='global load', -- also need a 4th entry for saving
+  ['apply macros']=skip_apply,
+  }
 
 
 add_token_keys(macro_params)
@@ -127,7 +256,7 @@ cdr is [3]
 --]]
 
 
-local function nullp(l) return l==Nil end
+nullp= function(l) return l==Nil end
 local function listp(n) 
     return type(n)=='table' and 'Cons' ==  n[1]
 end
@@ -136,10 +265,22 @@ local function pairp(n)
     return (not nullp(n)) and listp(n)
 end
 
-local function car(n)
+car=function(n)
   return n[2] 
 end
-local function cdr(n)
+cadr=function(n)
+  return n[3][2] 
+end
+caddr=function(n)
+  return n[3][3][2] 
+end
+cdddr=function(n)
+  return n[3][3][3] 
+end
+cddr=function(n)
+  return n[3][3] 
+end
+cdr= function(n)
   return n[3] 
 end
 
@@ -158,15 +299,27 @@ return setmetatable({'Cons',first,rest},
     })
 end
 
+local function reverse_transfer_one_in_place(dest,source)
+  if not nullp(source) then 
+    dest,source,source[3] = source,source[3],dest
+  end
+  return dest,source
+end
+
+local function reverse_list_in_place(l,concat)
+  local d=concat or Nil
+  while not nullp(l) do
+    l,d,l[3]=l[3],l,d
+  end
+  return d
+end
 
 local function reverse_list(l,concat)
-  print 'enter reverse list'
   local d=concat or Nil
   while not nullp(l) do
     d=cons(l[2],d)
     l=l[3]
   end
-  print 'exit reverse list'
   return d
 end
 
@@ -196,6 +349,19 @@ local function array_to_reversed_list(a, concat)
   return l
 end
 
+local function nthcar(n,l)
+  repeat
+    if nullp(l) then return Nil end
+    if n>1 then 
+      n=n-1
+      l=cdr(l)
+    else
+      break
+    end
+  until false
+  return car(l)
+ end
+ 
 local function quoted_tostring(q)
   return tostring(q)
 --  if type(q)~='string' then return tostring(q) end
@@ -226,8 +392,8 @@ cons_tostring = function(self)
         end
 end
   
-local function concat_cons(l,v)
-  dest = {}
+concat_cons= function(l,v)
+  local dest = {}
   while not nullp(l) do table.insert(dest,l[2]) l=l[3] end
   return table.concat(dest,v)
 end
@@ -237,8 +403,6 @@ Nil[2]=Nil
 Nil[3]=Nil
 assert(Nil==Nil[2])
 
---forward reference
-local strip_tokens_from_list 
 
 local function read_to(token_clist,end_token)
 print('read to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
@@ -256,16 +420,17 @@ print('read to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_toke
   return false,token_clist,0
 end
 
-local function read_match_to(token_clist,end_token)
+read_match_to = function(token_clist,end_token)
 print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local r=token_clist
   local len=0
   while not nullp(r) and car(r).macro_token~=end_token do
-    if match[car(r)] then
+    if match[car(r).macro_token] then
       local succ,inc
+      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
       succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
       if not succ then 
-        out('failed')
+        out('failed inner match')
         return false,token_clist,0 
       end
       len=len+inc+1
@@ -281,16 +446,17 @@ print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',en
   return false,token_clist,0
 end
 
-local function read_match_to_no_commas(token_clist,end_token)
-print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
+read_match_to_no_commas= function(token_clist,end_token)
+print('read match to no commas"', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local r=token_clist
   local len=0
   while not nullp(r) and car(r).macro_token~=end_token and car(r).macro_token~=',' do
     if match[car(r).macro_token] then
       local succ,inc
+      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
       succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
       if not succ then 
-        out('failed')
+        out('failed inner match')
         return false,token_clist,0 
       end
       len=len+inc+1
@@ -366,18 +532,16 @@ local function sublist_to_array(s,endoff)
   return d
 end
 
-local function sublist_to_list(s,endoff)
+sublist_to_list= function (s,endoff)
   return array_to_list(sublist_to_array(s,endoff))
 end
 
 strip_tokens_from_list= function(l)
-  print 'enter strip_tokens_from_list'
   local d={}
   while not nullp(l) do
     table.insert(d,car(l).macro_token)
     l=cdr(l)
   end
-  print 'exit strip_tokens_from_list'
   return array_to_list(d)
 end
 
@@ -393,63 +557,171 @@ local function sublist_to_string(s)
   return tostring(sublist_to_list(s))
 end
 
-local macros=
-{      
+macros=
+{
+    
 }
 
-local function validate_params(head)
-  local i=1
-  while i<=#head do
-    local is_param = macro_params[head[i].macro_token]
-    if is_param and (i==#head or head[i+1].type ~= 'Id') then 
-      error ("identifier missing after match specifier in head") 
+
+local function apply_inner_macros(macros_dest,params,params_info)
+  
+  local function replace_params(l)
+	local d=cons(Nil,Nil)
+	local r=d
+	local p=Nil
+	while not nullp(l) do
+		if macro_params[car(l).macro_token] and params_info[cadr(l).macro_token].value then
+			r[2]=params_info[cadr(l).macro_token].value
+			l=cddr(l)
+		else
+			r[2]=car(l)
+			l=cdr(l)
+		end
+		r[3]=cons(Nil,Nil)
+		p=r
+		r=r[3]
+	end
+	p[3]=Nil
+	return d
+  end
+  
+  local dest = {}
+  if not params.head then 
+    error  'inner macros have to have a head' 
+  end
+  dest.head=replace_params(params.head)--replace_params(array_to_list(string_to_token_array(params.head)))
+  if params.body then
+    if type(params.body) == 'function'  then
+      dest.body = params.body
+    else
+      dest.body=replace_params(params.body or {})--replace_params(array_to_list(string_to_token_array(params.body or {})))
     end
-    if is_param then i=i+2 else i=i+1 end
+  end
+  if params.semantic_function and type(params.semantic_function)~='function' then
+    error 'semantic_function has to be a function'
+  end
+  dest.semantic_function = params.semantic_function
+  dest.new_tokens = params.new_tokens
+  dest.sections = params.section
+    
+  validate_params(dest.head,true)
+  dest.handle, dest.handle_offset = scan_head_forward(dest.head)
+  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
+--you know what, there's no reason for a limit on how far forward a macro
+--can match, it just means the rescan has to go that far.
+--  scan_head_backward(dest.head)
+
+  validate_params(dest.body)
+  
+  if params.sections then
+    dest.sections={}
+    for k,v in pairs(params.sections) do
+      dest.sections[k]=replace_params(array_to_list(string_to_token_array(v)))
+      validate_params(dest.sections[k])
+    end
+  end  
+  
+  table.insert(macros_dest,dest)
+end
+
+validate_params= function (head, is_head)
+  if not head then
+    print 'wat'
+  end
+  
+  --head=array_to_list(head)
+  
+  while not nullp(head) do
+    local c = car(head)
+    if not c or not c.macro_token then
+      print 'wat'
+    end
+    local is_param = macro_params[c.macro_token]
+    if is_param == 'apply macros' then
+        if is_head then error '#apply can not appear in the head' end
+    elseif is_param and (nullp(cdr(head)) or cadr(head).type ~= 'Id') then 
+      error ("identifier missing after match specifier "..c.macro_token .." in head") 
+    end
+    local apply_struct
+    if is_param then 
+      local apply_struct
+      head,apply_struct=skip_param_tokens[is_param](head,true)
+      if apply_struct then 
+        print('#apply on these macros:',apply_struct) 
+      end
+    else 
+      head=cdr(head)
+    end
   end
   
 end
 
-local function scan_head_forward(head)
-  local i=1
-  while i<=#head do
-    local is_param = macro_params[head[i].macro_token]
+scan_head_forward= function(head)
+  
+  --head=array_to_list(head)
+  
+  i=1
+  while not nullp(head) do
+    local c = car(head)
+    local is_param = macro_params[c.macro_token]
     if is_param then
       if is_param~= 'param' then 
         error('macro must start with a constant token or constant preceded by single token params:'.. head) 
       end
     else
-      return true
+      return c.macro_token,i
     end
     if is_param then i=i+2 else i=i+1 end
   end
   error('macro must have a constant token:'.. head)
 end
-local function scan_head_backward(head)
-  local i = #head
-  while i>=1 do
-    local is_param;
-    if i>1 then is_param = macro_params[head[i-1].macro_token] else is_param=false end 
-    if is_param then
-      if is_param~= 'param' then 
-        error('macro must end with a constant token or constant preceded by single token params:'.. head) 
-      end
-    else
-      return true
-    end
-    if is_param then i=i-2 else i=i-1 end
-  end
-  error('macro must have a constant token:'.. head)
-end
-local function add_macro(newtokens, head, body)
-  head=string_to_token_array(head)
-  body=string_to_token_array(body)
 
-  validate_params(head)
-  scan_head_forward(head)
-  scan_head_backward(head)
-  validate_params(body)
-  add_tokens(newtokens)
-  table.insert(macros,{newtokens,head,body})
+--[[Possibly params
+new_tokens,
+head (required)
+semantic_function
+body / (can be a function)
+sections = {section_name (can be functions)...}}
+macros_dest is optional
+]]
+add_macro= function (params, macros_dest)
+  
+  local dest = {}
+  if not params.head then error  'macros have to have a head' end
+  dest.head=array_to_list(string_to_token_array(params.head))
+  if params.body then
+    if type(params.body) == 'function'  then
+      dest.body = params.body
+    else
+      dest.body=array_to_list(string_to_token_array(params.body or {}))
+    end
+  end
+  if params.semantic_function and type(params.semantic_function)~='function' then
+    error 'semantic_function has to be a function'
+  end
+  dest.semantic_function = params.semantic_function
+  dest.new_tokens = params.new_tokens
+  dest.sections = params.section
+    
+  validate_params(dest.head,true)
+  dest.handle, dest.handle_offset = scan_head_forward(dest.head)
+  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
+--you know what, there's no reason for a limit on how far forward a macro
+--can match, it just means the rescan has to go that far.
+--  scan_head_backward(dest.head)
+
+  validate_params(dest.body)
+  
+  if params.sections then
+    dest.sections={}
+    for k,v in pairs(params.sections) do
+      dest.sections[k]=array_to_list( string_to_token_array(v))
+      validate_params(dest.sections[k])
+    end
+  end  
+  add_tokens(dest.new_tokens)
+  
+  table.insert(macros_dest or macros,dest)
 end
 
 
@@ -467,42 +739,42 @@ end
 --        processed,new_pos=macro_match(flatten,pos,v)
 -- needs to return a sublist
 local function macro_match(datac,macro)
-  local head,body=macro[2],macro[3]
-  local c,hpos=datac,1
+  local head=macro.head --array_to_list(macro.head)
+  local c,pos=datac,head
   local param_info={} --type=, value=
   local match = function(match_fn)
-      if not head[hpos+2] then error "match until must have a token after it" end
-      if macro_params[head[hpos+2].macro_token] then error "match until must end with a constant token" end
-      local succ, nc, inc = match_fn(c,head[hpos+2].macro_token)
+      if nullp(caddr(pos)) then error "match until must have a token after it" end
+      if macro_params[caddr(pos).macro_token] then error "match until must end with a constant token" end
+      local succ, nc, inc = match_fn(c,caddr(pos).macro_token)
       if not succ then return false end
       out("match succeeded, inc =",inc)
-      if param_info[head[hpos+1].macro_token].value then -- prolog style equality matching
-        if not (stripped_sublist_equal(param_info[head[hpos+1].macro_token].value,{c,nc})) then
-          out('reusing parameter match failed on', head[hpos+1].macro_token )
+      if param_info[cadr(pos).macro_token].value then -- prolog style equality matching
+        if not (stripped_sublist_equal(param_info[cadr(pos).macro_token].value,{c,nc})) then
+          out('reusing parameter match failed on', cadr(pos).macro_token )
           return false
         else 
-          out(head[hpos+1].macro_token, "= a previous match", sublist_to_stripped_string(param_info[head[hpos+1].macro_token]))
+          out(cadr(pos).macro_token, "= a previous match", sublist_to_stripped_string(param_info[cadr(pos).macro_token]))
         end
       else
-        param_info[head[hpos+1].macro_token].value = sublist_to_list({c,nc},1)
-        if #(param_info[head[hpos+1].macro_token].value) == 0 then
+        param_info[cadr(pos).macro_token].value = sublist_to_list({c,nc},1)
+        if #(param_info[cadr(pos).macro_token].value) == 0 then
           out("empty parameter")
           return false
         end
-        out(head[hpos+1].macro_token,"set to",tostring(strip_tokens_from_list(param_info[head[hpos+1].macro_token].value)))
+        out(cadr(pos).macro_token,"set to",tostring(strip_tokens_from_list(param_info[cadr(pos).macro_token].value)))
       end
       c=nc
-      hpos=hpos+3
+      pos=cdddr(pos)
       return true
     end
   
-  while head[hpos] do --head
-    if head[hpos].macro_token==car(c).macro_token then
-      hpos=hpos+1
+  while not nullp(pos) do --head
+    if car(pos).macro_token==car(c).macro_token then
+      pos=cdr(pos)
       c=cdr(c)
-    elseif macro_params[head[hpos].macro_token] then
-      local param_type = macro_params[head[hpos].macro_token]
-      local param_name=head[hpos+1].macro_token
+    elseif macro_params[car(pos).macro_token] then
+      local param_type = macro_params[car(pos).macro_token]
+      local param_name=cadr(pos).macro_token -- #apply doesn't appear in the head
       if not param_info[param_name] then 
         param_info[param_name]={type=param_type} 
       end
@@ -512,26 +784,26 @@ local function macro_match(datac,macro)
           if param_info[param_name].value~=car(c).macro_token then 
             return false,datac 
           else 
-            out(head[hpos+1].macro_token, "= a previous match", car(c).macro_token)
+            out(cadr(pos).macro_token, "= a previous match", car(c).macro_token)
           end
         else
           param_info[param_name].value=car(c)
-          out(head[hpos+1].macro_token,"set to",car(c).macro_token)
+          out(cadr(pos).macro_token,"set to",car(c).macro_token)
         end
-        hpos=hpos+2
-      elseif macro_params[head[hpos].macro_token]=='param until' then
+        pos=cddr(pos)
+      elseif macro_params[car(pos).macro_token]=='param until' then
         if not match(read_to) then 
           return false,datac 
         end
-      elseif macro_params[head[hpos].macro_token]=='params' then
+      elseif macro_params[car(pos).macro_token]=='params' then
         if not match(read_match_to) then 
           return false,datac 
         end
-      elseif macro_params[head[hpos].macro_token]=='param match until' then
+      elseif macro_params[car(pos).macro_token]=='param match until' then
         if not match(read_match_to_no_commas) then 
           return false,datac 
         end
-      elseif macro_params[head[hpos].macro_token]=='generate var' then 
+      elseif macro_params[car(pos).macro_token]=='generate var' then 
         error "can't have a generate variable in a macro head"
       else --unused so far
       end
@@ -540,86 +812,152 @@ local function macro_match(datac,macro)
       return false,datac
     end
   end
-  local dest={} --splices c on after  
-  local bi=1 
-  while bi<=#body do
- --   if not bi or not body or not body[bi] or not body[bi].macro_token then
- --     print 'breakpoint'
- --   end
-    local param_type_text=macro_params[body[bi].macro_token]
-    local param_type=nil
-    if param_type_text then 
-      bi=bi+1
-      if param_type_text=='generate var' then
-        if not param_info[body[bi].macro_token] then 
-          param_info[body[bi].macro_token]={type='generate var'}
-        end
-      end
-      if not param_info[body[bi].macro_token] then
-        error "body contains a parameter that isn't in the head"
-      end
-      
-      param_type = param_info[body[bi].macro_token].type
-      print('param type = '..param_type)
-    end
---    if param_type_text=='generate var'
-    
-    if not param_type_text then
-      table.insert(dest,body[bi])
---      dest=cons(body[bi],dest)
-      out('>>',body[bi].macro_token)
-    elseif not param_type then 
-       error(' unmatched parameter '..body[bi].macro_token) 
-    elseif param_type=='param' then
-      table.insert(dest,param_info[body[bi].macro_token].value)
---      dest=cons(param_info[body[bi].macro_token].value,dest)
-      out('>>',param_info[body[bi].macro_token].value)
-    elseif param_type=='param until' 
-    or param_type=='param match until' 
-    or param_type=='params' then
-      dest=append_list_to_array(dest,param_info[body[bi].macro_token].value)
-      print('>>',param_info[body[bi].macro_token].value)
-    elseif param_type=='generate var' then 
-      if not param_info[body[bi].macro_token].value then
-        gen_var_counter=gen_var_counter+1
-        param_info[body[bi].macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
-        out('generating variable',body[bi].macro_token, 'as',param_info[body[bi].macro_token].value )
-      end
---      dest=cons(param_info[body[bi].macro_token].value,dest)
-       table.insert(dest,param_info[body[bi].macro_token].value)
-       out('>>',param_info[body[bi].macro_token].value)
-    else --unused so far
-    end
-    bi=bi+1
+  local do_body= function (body)
+    local dest={} --splices c on after  
+    local bi=body 
+    print("Scanning Body", strip_tokens_from_list( body))
+    while not nullp(bi) do
+   --   if not bi or not body or not body[bi] or not body[bi].macro_token then
+   --     print 'breakpoint'
+   --   end
+      local param_type_text=macro_params[car(bi).macro_token]
+      local param_type=nil
+        if param_type_text=='apply macros' then
+          local inner_macros,p
+          bi,inner_macros,p= skip_param_tokens[param_type_text](bi)
+          print('++++++++++++++++++++++++++++', inner_macros)
+          local temp={}
+          for i=1,#inner_macros do
+            apply_inner_macros(temp,inner_macros[i],param_info)
+          end
+          temp=apply_macros(temp,param_info[p.macro_token].value)
+          dest=append_list_to_array(dest,temp)
+        else
+          if param_type_text then  
+            bi= skip_param_tokens[param_type_text](bi)
+          
+            if param_type_text=='generate var' then
+              if not param_info[car(bi).macro_token] then 
+                param_info[car(bi).macro_token]={type='generate var'}
+              end
+            end
+            if not param_info[car(bi).macro_token] then
+              error "body contains a parameter that isn't in the head"
+            end
+            
+            param_type = param_info[car(bi).macro_token].type
+            print('param type = '..param_type)
+          end
+      --    if param_type_text=='generate var'
+          
+          if not param_type_text then
+            table.insert(dest,car(bi))
+      --      dest=cons(body[bi],dest)
+            out('>>',car(bi).macro_token)
+          elseif not param_type then 
+             error(' unmatched parameter '..car(bi).macro_token) 
+          elseif param_type=='param' then
+            table.insert(dest,param_info[car(bi).macro_token].value)
+      --      dest=cons(param_info[body[bi].macro_token].value,dest)
+            out('>>',param_info[car(bi).macro_token].value)
+          elseif param_type=='param until' 
+          or param_type=='param match until' 
+          or param_type=='params' then
+            dest=append_list_to_array(dest,param_info[car(bi).macro_token].value)
+            print('>>',param_info[car(bi).macro_token].value)
+          elseif param_type=='generate var' then 
+            if not param_info[car(bi).macro_token].value then
+              gen_var_counter=gen_var_counter+1
+              param_info[car(bi).macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
+              out('generating variable',car(bi).macro_token, 'as',param_info[car(bi).macro_token].value )
+            end
+      --      dest=cons(param_info[body[bi].macro_token].value,dest)
+             table.insert(dest,param_info[car(bi).macro_token].value)
+             out('>>',param_info[car(bi).macro_token].value)
+          else --unused so far
+          end
+          bi=cdr(bi)
+        end --~= apply macro
+    end --while
+    return true,c,array_to_list(dest,c)
+  end --function do_body
+  if macro.sections then --{}{}{} ignore sections for now
   end
-  return true,c,array_to_list(dest,c)
+  if macro.semantic_function then
+    local sem_return = macro.semantic_function(param_info,c)
+      if not sem_return then return false,datac end
+      if sem_return~=true then return true,sem_return end
+  end
+  if macro.body then
+    if type(macro.body) == 'function' then
+      local body_ret = macro.body(param_info,c)
+      if body_ret then return true,body_ret end
+      return false,datac 
+    else
+      return do_body(macro.body)
+    end
+  end     
 end
 
-local function process(str)
-  local flatten=array_to_reversed_list(string_to_source_array(str))
+apply_macros = function(macros, list)
+  local flatten=reverse_list(list)
+  
   local dest = Nil
   while not nullp(flatten) do
-    dest = cons(car(flatten),dest)
-    flatten=cdr(flatten)
+    dest,flatten = reverse_transfer_one_in_place(dest,flatten)
+--    dest = cons(car(flatten),dest)
+--    flatten=cdr(flatten)
     local done
     repeat 
       done = true
       for i,v in ipairs(macros) do
         local processed,start
         --{}{}{} start isn't in dest because I reversed the list after adding start
-        processed,dest,start=macro_match(dest,v)
-        if processed then 
-          done = false
-          --set rescan back by the whole macro
-          --is it possible that it sets up less than a whole macro?  
-          while start~=dest do
-            flatten=cons(car(start),flatten)
-            start=cdr(start)
+        --a bit of optimization
+        --if I can table drive this more it could be more optimized, but
+        --how to maintain macro order then?
+        if v.handle == nthcar(v.handle_offset,dest).macro_token then 
+          processed,dest,start=macro_match(dest,v)
+          if processed then 
+            done = false
+            --set rescan back by the whole macro
+            --is it possible that it sets up less than a whole macro?  
+            --rescan from the end of the new substitution
+            while start~=dest do
+              flatten, start = reverse_transfer_one_in_place(flatten,start)
+--              flatten=cons(car(start),flatten)
+--              start=cdr(start)
+            end
           end
         end
       end
     until done
   end
+  return dest
+end
+
+local function process(str)
+  local source_array = string_to_source_array(str)
+  
+  local prev_line=-1
+  local line = {}
+  for i=1,#source_array do
+    if source_array[i].token.y ~= prev_line then
+      if #line~=0 then 
+        print('**'..table.concat(line,' ')..'**')
+        line={}
+        prev_line = source_array[i].token.y
+      end
+    end
+    table.insert(line,source_array[i].macro_token)
+  end
+  if #line~=0 then 
+    print('**'..table.concat(line,' ')..'**')
+    line={}
+  end
+  
+--{}{}{}  
+  local dest= apply_macros(macros,array_to_list( source_array))
   local ret=concat_cons(strip_tokens_from_list(dest),' ')
   print(strip_tokens_from_list( dest))
   return ret

@@ -1,15 +1,20 @@
 macros = require 'macro_require'
 
-macros.add({'amb','endamb','inner_amb'},
-  [[local amb ?id = ( ?()...first , ?,...rest ) ?,...statements endamb]],
-   [[for _,%i in ipairs{ [|| @ ?first |], inner_amb ?rest } do
-    local ?id=%i();
-    ?statements
-   end]])
-   
-macros.add({'inner_amb'},'inner_amb }','}')
-macros.add({'inner_amb'},'inner_amb ?()...a }','[||@?a |],}')
-macros.add({'inner_amb'},'inner_amb ?...first , ?,...rest }','[||@?first |], inner_amb ?rest }')
-
+macros.add{
+  new_tokens={'WHILE','DO','END', 'BREAK', 'CONTINUE'},
+  head='WHILE ?()...exp DO ?,...statements END',
+  body=[[
+  local function %loop() 
+    if ?exp then
+      #apply({{head='BREAK',body='return("__*done*__")'},
+      {head='CONTINUE',body='return %loop()'},}, ?statements)
+      return %loop()
+    end
+    return '__*done*__'
+  end
+  local %save=table.pack(%loop())
+  if %save[1]~='__*done*__' then return table.unpack(%save,%save.n) end
+  ]]
+}
 t=require 'macrotest'
 
