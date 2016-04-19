@@ -233,7 +233,7 @@ ascii_tok[('['):byte(1)]=function(str,x,y,pos)
       if _ then 
         if str:byte(content_start) == ('\n'):byte(1) then content_start=content_start+1 end
         local with_ends, indent, down = nlcr_process(str:sub(pos,whole_end-1))
-        return indent,y+down,whole_end,'String',(nlcr_process(str:sub(content_start,content_end-1))), with_ends
+        return indent,y+down,whole_end,'String',with_ends,(nlcr_process(str:sub(content_start,content_end-1)))
         end
       l = str:match("^%[=*%[[^\n]*",pos) 
       if l then return x+#l,y,pos+#l,'Error',l,'unfinished long string' end 
@@ -267,8 +267,8 @@ end
 local function tokenize_all(input)
   if not input or 0==#input then return false, {}, {} end
 local pos=1
-local x=0
-local line=0
+local x=1
+local line=1
 local source={}
 local meaningful={}
 local error_pos=false
