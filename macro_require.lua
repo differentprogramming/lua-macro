@@ -1,12 +1,84 @@
-
 tokenizer=require 'simple_tokenizer'
+--local serpent = require("serpent")
 --require 'class'
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
-local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys
+local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
+local my_err
 
 local function insure_subtable_exists(original_table,field)
   if not original_table.field then original_table.field={} end
+end
+
+local function my_loadstring(string, filename,tokens)
+
+  if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
+  local file=io.open(filename,"w")
+--  file:write('return((')
+  file:write(string)
+--  file:write(')())')
+  file:close()
+  local function my_hander(err)
+    print('in handler '..tostring(err))
+    local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
+    if not token_number then 
+      my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+    else
+      token_number = tonumber(token_number)
+      
+     print ('error at token '..token_number.. ' error message: "'..error_text..'"')
+      if tokens then
+          my_err(nthcar( token_number,tokens), error_text)
+      else 
+        my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+      end
+    end
+  end
+  local ret
+  local status --= xpcall(my_do,my_hander)
+  local function my_do(...)
+      local s=table.pack(pcall(status,...))
+      if not s[1] then my_hander(s[2]) end
+      table.remove(s,1)
+      return table.unpack(s,s.n-1)
+  end
+  status,ret=loadfile(filename)
+  if not status then my_hander(ret) end
+--  print ('the status is "' .. tostring(status) ..'"')
+  return my_do
+end
+
+local function my_dostring(string, filename, tokens)
+
+  if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
+  local file=io.open(filename,"w")
+  file:write(string)
+  file:close()
+  local function my_hander(err)
+--    print('in handler '..tostring(err))
+    local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
+    if not token_number then 
+      my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+    else
+      token_number = tonumber(token_number)
+      
+--      print ('error at token '..token_number.. ' error message: "'..error_text..'"')
+      if tokens then
+          my_err(nthcar(tokens, token_number), error_text)
+      else 
+        my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+      end
+    end
+    return true
+  end
+  local ret
+  local function my_do()
+      ret=dofile(filename)
+  end
+  local status = xpcall(my_do,my_hander)
+
+--  print ('the status is "' .. tostring(status) ..'"')
+  return ret
 end
 
 function array_to_set_table(a)
@@ -39,13 +111,15 @@ simple_translate = setmetatable(
 local function pp_null_fn(lines, line_number) return line_number+1 end
 
 local function file_path(mtoken)
+  if mtoken and mtoken.token and mtoken.token.filename then return mtoken.token.filename end 
   return '¯\\_(ツ)_/¯'
 end
 
-local function my_err(mtoken,err)
+my_err= function (mtoken,err)
   local line=' '
   err=err or 'error'
-  if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.line_from)..' ' end
+  print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) )  
+  if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.from_line)..' ' end
   io.stderr:write(file_path(mtoken).. line .. err)
   os.exit(1)
 end
@@ -61,7 +135,9 @@ local function pp_macro(lines,line_number)
     if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after #macro, } expected')
  end
     local ret = strip_tokens_from_list(sublist_to_list( {cdr(start),nl} ))
-   local macro = loadstring('return('..concat_cons(ret,' ')..')')();
+    local filename = nil
+    if car(start).token then filename = car(start).token.filename end
+   local macro = my_dostring('return('..concat_cons(ret,'\n')..')', filename, cdr(start));
    add_macro(macro)
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
@@ -73,6 +149,18 @@ local function pp_macro(lines,line_number)
   end
   return car(nl).token.from_line+1
 end
+
+--turn list back to normal cons cells after first stage of preprocessing
+local function strip_back_links(list)
+  local n=list
+  while not nullp(n) do
+    n[1]='Cons'
+    n=n[3]
+  end
+  while list.macro_token == '' do list=list[3] end
+  return list
+end
+
 
 preprocessor_tokens =  setmetatable({
 ['#start']=pp_null_fn,
@@ -146,22 +234,22 @@ local function no_source_token(t)
   return {macro_token=t}
 end
 
-local function string_to_source_array(str)
-  local error_pos, source, meaningful =tokenizer.tokenize_all(str)
+local function string_to_source_array(str,filename)
+  local error_pos, source, meaningful =tokenizer.tokenize_all(str,filename)
   if not error_pos then
     local flatten={}
     for a = 1,#meaningful do 
       local value =source[meaningful[a]].value
       local ttype = source[meaningful[a]].type
       table.insert(flatten, {macro_token=simple_translate[value],type=ttype,token=source[meaningful[a]]}) 
-      print('y = '..tostring( flatten[#flatten].token.from_line )..'\t x = '.. tostring( flatten[#flatten].token.from_x))
+--      print('y = '..tostring( flatten[#flatten].token.from_line )..'\t x = '.. tostring( flatten[#flatten].token.from_x))
     end 
     return flatten
   end
 end
 
-local function string_to_token_array(str)
-  local error_pos, source, meaningful =tokenizer.tokenize_all(str)
+local function string_to_token_array(str, filename)
+  local error_pos, source, meaningful =tokenizer.tokenize_all(str, filename)
   if not error_pos then
     local flatten={}
     for a = 1,#meaningful do 
@@ -217,11 +305,15 @@ local function skip_apply(l, store, outer)
     s,nl=read_match_to(l,',')
     if not s then error 'array of macros expected after #apply (' end
     if nullp(nl) or car(nl).macro_token ~=',' then error ', expected after #apply({macros...} ' end
+    --{}{}{} could use formatting
     ret = strip_tokens_from_list(sublist_to_list( {l,nl},1 ))
+    local tokens = l
     l=cdr(nl);
     --concat_cons(ret,' ');
    where_struct_goes[2]={}
-   local temp_macros = loadstring('return('..concat_cons(ret,' ')..')')();
+   local filename=nil
+   if l.token then filename=l.token.filename end
+   local temp_macros = my_dostring('return('..concat_cons(ret,'\n')..')', filename, tokens);
    for i = 1,#temp_macros do
      add_macro(temp_macros[i],where_struct_goes[2])
    end
@@ -391,7 +483,7 @@ local function array_to_reversed_list(a, concat)
   return l
 end
 
-local function nthcar(n,l)
+nthcar = function (n,l)
   repeat
     if nullp(l) then return Nil end
     if n>1 then 
@@ -447,7 +539,7 @@ assert(Nil==Nil[2])
 
 
 local function read_to(token_clist,end_token)
-print('read to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
+--print('read to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local len =0;
   local r=token_clist
   while not nullp(r) and car(r).macro_token~=end_token do
@@ -455,24 +547,24 @@ print('read to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_toke
     len=len+1
   end
   if car(r) then 
-    print('succeeded')
+--    print('succeeded')
     return true,r,len 
   end
-  print('failed')
+--  print('failed')
   return false,token_clist,0
 end
 
 read_match_to = function(token_clist,end_token)
-print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
+-- print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local r=token_clist
   local len=0
   while not nullp(r) and car(r).macro_token~=end_token do
     if match[car(r).macro_token] then
       local succ,inc
-      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
+--      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
       succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
       if not succ then 
-        print('failed inner match')
+--        print('failed inner match')
         return false,token_clist,0 
       end
       len=len+inc+1
@@ -481,24 +573,24 @@ print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',en
     len=len+1
   end
   if car(r) then 
-    print('succeeded')
+--    print('succeeded')
     return true,r,len 
   end
-  print('failed')
+--  print('failed')
   return false,token_clist,0
 end
 
 read_match_to_no_commas= function(token_clist,end_token)
-print('read match to no commas"', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
+--print('read match to no commas"', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local r=token_clist
   local len=0
   while not nullp(r) and car(r).macro_token~=end_token and car(r).macro_token~=',' do
     if match[car(r).macro_token] then
       local succ,inc
-      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
+--      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
       succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
       if not succ then 
-        print('failed inner match')
+--        print('failed inner match')
         return false,token_clist,0 
       end
       len=len+inc+1
@@ -507,10 +599,10 @@ print('read match to no commas"', tostring(strip_tokens_from_list(token_clist)),
     len=len+1
   end
   if car(r).macro_token==end_token then 
-    print('succeeded')
+--    print('succeeded')
     return true,r,len 
   end
-  print('failed')
+--  print('failed')
   return false,token_clist,0
 end
 
@@ -519,12 +611,10 @@ local function sublist_end(a,p)
 end
 
 local function list_append_to_reverse(r,e)
-  print "enter list_append_to_reverse"
   while not nullp(e) do
     r=cons(car(e),r)
     e=cdr(e)
   end
-  print "leave list_append_to_reverse"
   return r
 end
 
@@ -648,7 +738,7 @@ local function apply_inner_macros(macros_dest,params,params_info)
     
   validate_params(dest.head,true)
   dest.handle, dest.handle_offset = scan_head_forward(dest.head)
-  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
+--  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
 --you know what, there's no reason for a limit on how far forward a macro
 --can match, it just means the rescan has to go that far.
 --  scan_head_backward(dest.head)
@@ -688,9 +778,9 @@ validate_params= function (head, is_head)
     if is_param then 
       local apply_struct
       head,apply_struct=skip_param_tokens[is_param](head,true)
-      if apply_struct then 
-        print('#apply on these macros:',apply_struct) 
-      end
+--      if apply_struct then 
+--        print('#apply on these macros:',apply_struct) 
+--      end
     else 
       head=cdr(head)
     end
@@ -747,7 +837,7 @@ add_macro= function (params, macros_dest)
     
   validate_params(dest.head,true)
   dest.handle, dest.handle_offset = scan_head_forward(dest.head)
-  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
+--  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
 --you know what, there's no reason for a limit on how far forward a macro
 --can match, it just means the rescan has to go that far.
 --  scan_head_backward(dest.head)
@@ -778,32 +868,45 @@ for i,v in ipairs(macros) do
   v[3]=string_to_token_array(v[3])
 end
 
---        processed,new_pos=macro_match(flatten,pos,v)
+--        processed,replaced_tokens_list,last_replaced_token_list_element =macro_match(flatten,pos,v)
 -- needs to return a sublist
+-- returns processed/didn't followed by first element replace followed by last element of macro
 local function macro_match(datac,macro)
   local head=macro.head --array_to_list(macro.head)
   local c,pos=datac,head
   local param_info={} --type=, value=
-  local match = function(match_fn)
+  
+  --reading into parameters in the head
+  --if they already have values, then verifying that they match
+  local match = function(match_fn) -- read_to, read_match_to or read_match_to_no_commas
+      --pos must point at the parameter specifier ie ?
+      --caddr(pos) will be what we stop at
       if nullp(caddr(pos)) then error "match until must have a token after it" end
       if macro_params[caddr(pos).macro_token] then error "match until must end with a constant token" end
+      --success, end token (the one targetted), number of tokens matched including final
       local succ, nc, inc = match_fn(c,caddr(pos).macro_token)
       if not succ then return false end
-      print("match succeeded, inc =",inc)
+--      print("match succeeded, inc =",inc)
+      -- if the parameter you're matching into already has a value, that's ok if the text matched has the same
+      -- tokens as what it already holds
       if param_info[cadr(pos).macro_token].value then -- prolog style equality matching
         if not (stripped_sublist_equal(param_info[cadr(pos).macro_token].value,{c,nc})) then
-          print('reusing parameter match failed on', cadr(pos).macro_token )
+--          print('reusing parameter match failed on', cadr(pos).macro_token )
           return false
         else 
-          print(cadr(pos).macro_token, "= a previous match", sublist_to_stripped_string(param_info[cadr(pos).macro_token]))
+--          print(cadr(pos).macro_token, "= a previous match", sublist_to_stripped_string(param_info[cadr(pos).macro_token]))
         end
       else
+        --copy match into the parameter, cutting off the stop character
         param_info[cadr(pos).macro_token].value = sublist_to_list({c,nc},1)
+        --if nothing was matched, that's a failure
+        --we could make a match type that accepts empty matchesS
+        --{}{}{} maybe we should allow this or make it an option maybe ?? instead of ?
         if #(param_info[cadr(pos).macro_token].value) == 0 then
-          print("empty parameter")
+--          print("empty parameter")
           return false
         end
-        print(cadr(pos).macro_token,"set to",tostring(strip_tokens_from_list(param_info[cadr(pos).macro_token].value)))
+--        print(cadr(pos).macro_token,"set to",tostring(strip_tokens_from_list(param_info[cadr(pos).macro_token].value)))
       end
       c=nc
       pos=cdddr(pos)
@@ -826,11 +929,11 @@ local function macro_match(datac,macro)
           if param_info[param_name].value~=car(c).macro_token then 
             return false,datac 
           else 
-            print(cadr(pos).macro_token, "= a previous match", car(c).macro_token)
+--            print(cadr(pos).macro_token, "= a previous match", car(c).macro_token)
           end
         else
           param_info[param_name].value=car(c)
-          print(cadr(pos).macro_token,"set to",car(c).macro_token)
+--          print(cadr(pos).macro_token,"set to",car(c).macro_token)
         end
         pos=cddr(pos)
       elseif macro_params[car(pos).macro_token]=='param until' then
@@ -854,10 +957,12 @@ local function macro_match(datac,macro)
       return false,datac
     end
   end
+  
+  
   local do_body= function (body)
     local dest={} --splices c on after  
     local bi=body 
-    print("Scanning Body", strip_tokens_from_list( body))
+--    print("Scanning Body", strip_tokens_from_list( body))
     while not nullp(bi) do
    --   if not bi or not body or not body[bi] or not body[bi].macro_token then
    --     print 'breakpoint'
@@ -867,7 +972,7 @@ local function macro_match(datac,macro)
         if param_type_text=='apply macros' then
           local inner_macros,p
           bi,inner_macros,p= skip_param_tokens[param_type_text](bi)
-          print('++++++++++++++++++++++++++++', inner_macros)
+--          print('++++++++++++++++++++++++++++', inner_macros)
           local temp={}
           for i=1,#inner_macros do
             apply_inner_macros(temp,inner_macros[i],param_info)
@@ -888,34 +993,34 @@ local function macro_match(datac,macro)
             end
             
             param_type = param_info[car(bi).macro_token].type
-            print('param type = '..param_type)
+--            print('param type = '..param_type)
           end
       --    if param_type_text=='generate var'
           
           if not param_type_text then
             table.insert(dest,car(bi))
       --      dest=cons(body[bi],dest)
-            print('>>',car(bi).macro_token)
+--            print('>>',car(bi).macro_token)
           elseif not param_type then 
              error(' unmatched parameter '..car(bi).macro_token) 
           elseif param_type=='param' then
             table.insert(dest,param_info[car(bi).macro_token].value)
       --      dest=cons(param_info[body[bi].macro_token].value,dest)
-            print('>>',param_info[car(bi).macro_token].value)
+--            print('>>',param_info[car(bi).macro_token].value)
           elseif param_type=='param until' 
           or param_type=='param match until' 
           or param_type=='params' then
             dest=append_list_to_array(dest,param_info[car(bi).macro_token].value)
-            print('>>',param_info[car(bi).macro_token].value)
+--            print('>>',param_info[car(bi).macro_token].value)
           elseif param_type=='generate var' then 
             if not param_info[car(bi).macro_token].value then
               gen_var_counter=gen_var_counter+1
               param_info[car(bi).macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
-              print('generating variable',car(bi).macro_token, 'as',param_info[car(bi).macro_token].value )
+--              print('generating variable',car(bi).macro_token, 'as',param_info[car(bi).macro_token].value )
             end
       --      dest=cons(param_info[body[bi].macro_token].value,dest)
              table.insert(dest,param_info[car(bi).macro_token].value)
-             print('>>',param_info[car(bi).macro_token].value)
+--             print('>>',param_info[car(bi).macro_token].value)
           else --unused so far
           end
           bi=cdr(bi)
@@ -941,15 +1046,18 @@ local function macro_match(datac,macro)
   end     
 end
 
-apply_macros = function(macros, list)
-  local flatten=reverse_list(list)
+-- this could be written differently if 'list' is always a double linked list
+apply_macros = function(macros, flatten)
+  flatten=reverse_list_in_place(flatten)                    -- we keep the active portion of the expansion by transfering between a reversed and a forward list
+                                                            -- instead of having a double linked list.  
   
-  local dest = Nil
+  local dest = Nil                                          -- dest is the forward list, we will move forward as we expand
   while not nullp(flatten) do
-    dest,flatten = reverse_transfer_one_in_place(dest,flatten)
+    dest,flatten = reverse_transfer_one_in_place(dest,flatten)  -- move one token from the beginning of the reversed list to the beginning of the forward list
 --    dest = cons(car(flatten),dest)
 --    flatten=cdr(flatten)
-    local done
+    local done                                              -- we are done at a token when we've tried all macros and none expanded
+                                                            -- eventually we should optimize this, but we have to keep the macros in order so it won't be simple
     repeat 
       done = true
       for i,v in ipairs(macros) do
@@ -958,10 +1066,11 @@ apply_macros = function(macros, list)
         --a bit of optimization
         --if I can table drive this more it could be more optimized, but
         --how to maintain macro order then?
-        if v.handle == nthcar(v.handle_offset,dest).macro_token then 
-          processed,dest,start=macro_match(dest,v)
-          if processed then 
-            done = false
+        if v.handle == nthcar(v.handle_offset,dest).macro_token then  -- have we found a macro with the right handle?
+          processed,dest,start=macro_match(dest,v)                    -- if so process the macro
+          if processed then                                           -- if the macro expanded, it did so at the beginning of dest
+                                                                      -- dump the whole processed portion back into the reverse list to rescan
+            done = false                                             
             --set rescan back by the whole macro
             --is it possible that it sets up less than a whole macro?  
             --rescan from the end of the new substitution
@@ -970,6 +1079,7 @@ apply_macros = function(macros, list)
 --              flatten=cons(car(start),flatten)
 --              start=cdr(start)
             end
+            break -- should always scan macros in order!
           end
         end
       end
@@ -978,11 +1088,12 @@ apply_macros = function(macros, list)
   return dest
 end
 
-local function process(str)
-  local source_array = string_to_source_array(str)
-  local source_list=array_to_list(source_array)
-  local lines = {}
-  
+local function process(str,filename)
+  local source_array = string_to_source_array(str,filename)   -- stores simple translated names in macro_token, and the whole token in token
+  local source_list=array_to_list(source_array)               -- convert to sexpr so that it's more efficient to substitute in the middle
+                                                              -- source_list will be converted into a double linked list
+  local lines = {}                                            -- make array of lines in order to handle preprocessor directives that only appear at the beginning of lines
+                                                              -- 'lines[]' contains pointers into the continuous sexpr in source_list
   local function add_line(i,v)
     if not lines[i] then
       while #lines < i do table.insert(lines,0) end
@@ -990,9 +1101,10 @@ local function process(str)
     end
   end
   
-  local p,prev=source_list,'Cons'
+  local p,prev=source_list,'Cons'                             -- the first element of the double linked list remains a cons cell, It would be better to have a root cell
+                                                              -- I currently have to fake changing the first element, and that might not work in all cases.
   
-  while not nullp(p) do 
+  while not nullp(p) do                                       -- turn source_list into a double linked list
     add_line(car(p).token.from_line,p)
     p[1]=prev
     prev=p
@@ -1000,26 +1112,28 @@ local function process(str)
   end
   
   local i=1
-  while i < #lines do
-    if lines[i] == 0 then 
-      print('line '..i..' is blank')
-    else
-      print('line '..i.. 'is at ' .. car(lines[i]).token.from_line .. ' is a '.. car(lines[i]).macro_token)
-      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
-    end
+  while i < #lines do                                         -- handle preprocessor directives that only appear as the first token of lines
+--    if lines[i] == 0 then 
+--      print('line '..i..' is blank')
+--    else
+--      print('line '..i.. 'is at ' .. car(lines[i]).token.from_line .. ' is a '.. car(lines[i]).macro_token)
+--      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
+--    end
     if lines[i] ~= 0 then
-      i = preprocessor_tokens[car(lines[i]).macro_token](lines,i)
+      i = preprocessor_tokens[car(lines[i]).macro_token](lines,i) -- returns the next line to process
     else
       i=i+1
     end
   end
-  print('after preprocess statements are removed, file is [' .. strip_tokens_from_list(source_list) .. ']')
+--  print('after preprocess statements are removed, file is [' .. strip_tokens_from_list(source_list) .. ']')
   
---{}{}{}  
-  local dest= apply_macros(macros,source_list)
-  local ret=concat_cons(strip_tokens_from_list(dest),' ')
-  print(strip_tokens_from_list( dest))
-  return ret
+
+  local dest= apply_macros(macros,strip_back_links(source_list))  -- apply global macros. I strip the back links and nulified intial links just so that 
+                                                                  -- there can't be any bugs caused by using the back links when they're no longer valid
+  --{}{}{} could use formatting
+  local ret=concat_cons(strip_tokens_from_list(dest),'\n')  -- this should be changed to preserve formatting
+--  print(strip_tokens_from_list( dest))
+  return ret,dest
 end
 
 local macro_path = string.gsub(package.path,'%.lua','.pp.lua')
@@ -1033,7 +1147,8 @@ local function load(modulename)
     local file = io.open(filename, "rb")
     if file then
       -- Compile and return the module      print('here!')
-      return assert(loadstring(process(assert(file:read("*a"))), filename))
+      local string, tokens = process(assert(file:read("*a")))
+      return assert(my_loadstring(string, filename,tokens))
     end
     errmsg = errmsg.."\n\tno file '"..filename.."' (checked with custom loader)"
   end
@@ -1046,4 +1161,5 @@ table.insert(package.loaders, 2, load)
 return {
   add = add_macro,
   add_simple=add_simple_translate,
+  load=load,
   }

@@ -264,7 +264,7 @@ local function meaningful_tokenize(str,x,y,file_pos)
   return x, y, filepos,tok_type, tok_value, processed
 end
 
-local function tokenize_all(input)
+local function tokenize_all(input,filename)
   if not input or 0==#input then return false, {}, {} end
 local pos=1
 local x=1
@@ -275,7 +275,7 @@ local error_pos=false
 repeat
     local new_x, new_line, new_pos,tok_type, tok_value, processed = tokenize(input,x,line,pos)
   
-  table.insert(source, {from_x=x, to_x=new_x, from_line=line, to_line=new_line, from_pos=pos,to_pos=new_pos-1,type=tok_type, value=tok_value, processed=processed, source_index=#source} )
+  table.insert(source, {from_x=x, to_x=new_x, from_line=line, to_line=new_line, from_pos=pos,to_pos=new_pos-1,type=tok_type, value=tok_value, processed=processed, source_index=#source, filename=filename, source=source, meaningful = not not_meaningful[tok_type] } )
   pos=new_pos
   x=new_x
   line=new_line
