@@ -118,10 +118,12 @@ end
 my_err= function (mtoken,err)
   local line=' '
   err=err or 'error'
-  if mtoken.token then
-    print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) ) 
-  else
-    print('macro token '.. mtoken.macro_token ) 
+  if not nullp(mtoken) then 
+    if mtoken.token then
+      print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) ) 
+    else
+      print('macro token '.. mtoken.macro_token ) 
+    end
   end
   if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.from_line+1)..':'..tostring(mtoken.token.from_x+1)..':' end
   io.stderr:write(file_path(mtoken).. line .. err .. '\n')
@@ -325,16 +327,21 @@ end
 
 local function skip_apply(l, store, filename)
   l=cdr(l)
-  if car(l).macro_token ~='(' then error '( expected after #apply ' end
+  if car(l).macro_token ~='(' then my_err(car(l), '( expected after #apply ') end
   l=cdr(l)
   local ret
   local where_struct_goes = l
   if (store) then 
-    if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then error( 'array of macros expected after #apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
+    if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then my_err(car(l), 'array of macros expected after #apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
     local s,nl
     s,nl=read_match_to(l,',')
-    if not s then error 'array of macros expected after #apply (' end
-    if nullp(nl) or car(nl).macro_token ~=',' then error ', expected after #apply({macros...} ' end
+    if not s then my_err(car(l), 'array of macros expected after #apply (') end
+    if nullp(nl) then
+      my_err(car(l) ', expected after #apply({macros...} ') 
+    end
+    if car(nl).macro_token ~=',' then 
+      my_err(car(nl) ', expected after #apply({macros...} ') 
+    end
     --{}{}{} could use formatting
     ret = strip_tokens_from_list(sublist_to_list( {l,nl},1 ))
     local tokens = l
@@ -352,11 +359,11 @@ local function skip_apply(l, store, filename)
     l=cdr(l)
   end
   
-  if nullp(l) or not macro_params[car(l).macro_token] then error ('parameter expected after #apply({macros...}, got '.. car(l).macro_token ..' instead') end
+  if nullp(l) or not macro_params[car(l).macro_token] then my_err(car(l),'parameter expected after #apply({macros...}, got '.. car(l).macro_token ..' instead') end
   l=cdr(l)
-  if nullp(l) or car(l).type~='Id' then error ('Id expected after #apply({macros...}, got '.. car(l).macro_token..' type = "'.. tostring( car(l).type) ..'" instead') end
+  if nullp(l) or car(l).type~='Id' then my_err (car(l),'Id expected after #apply({macros...}, got '.. car(l).macro_token..' type = "'.. tostring( car(l).type) ..'" instead') end
   l=cdr(l)
-  if nullp(l) or car(l).macro_token ~=')' then error ') expected after #apply({macros...},?Id' end
+  if nullp(l) or car(l).macro_token ~=')' then my_err(car(l), ') expected after #apply({macros...},?Id') end
   return cdr(l),where_struct_goes[2],caddr(where_struct_goes)
 end
 
@@ -802,7 +809,7 @@ validate_params= function (head, is_head,filename)
     if is_param == 'apply macros' then
         if is_head then error '#apply can not appear in the head' end
     elseif is_param and (nullp(cdr(head)) or cadr(head).type ~= 'Id') then 
-      error ("identifier missing after match specifier "..c.macro_token .." in head") 
+      my_err (car(head),"identifier missing after match specifier "..c.macro_token .." in head") 
     end
     local apply_struct
     if is_param then 
@@ -828,14 +835,14 @@ scan_head_forward= function(head)
     local is_param = macro_params[c.macro_token]
     if is_param then
       if is_param~= 'param' then 
-        error('macro must start with a constant token or constant preceded by single token params:'.. head) 
+        my_err(car(head),'macro must start with a constant token or constant preceded by single token params:'.. head) 
       end
     else
       return c.macro_token,i
     end
     if is_param then i=i+2 else i=i+1 end
   end
-  error('macro must have a constant token:'.. head)
+  my_err (car(head),'macro must have a constant token:'.. head)
 end
 
 local function set_token_list_line(l,line)
@@ -924,8 +931,8 @@ local function macro_match(datac,macro)
   local match = function(match_fn) -- read_to, read_match_to or read_match_to_no_commas
       --pos must point at the parameter specifier ie ?
       --caddr(pos) will be what we stop at
-      if nullp(caddr(pos)) then error "match until must have a token after it" end
-      if macro_params[caddr(pos).macro_token] then error "match until must end with a constant token" end
+      if nullp(caddr(pos)) then my_err (cadr(pos), "match until must have a token after it") end
+      if macro_params[caddr(pos).macro_token] then my_err (caddr(pos), "match until must end with a constant token") end
       --success, end token (the one targetted), number of tokens matched including final
       local succ, nc, inc = match_fn(c,caddr(pos).macro_token)
       if not succ then return false end
@@ -992,7 +999,7 @@ local function macro_match(datac,macro)
           return false,datac 
         end
       elseif macro_params[car(pos).macro_token]=='generate var' then 
-        error "can't have a generate variable in a macro head"
+        my_err (car(pos), "can't have a generate variable in a macro head")
       else --unused so far
       end
       c=cdr(c)
@@ -1032,7 +1039,7 @@ local function macro_match(datac,macro)
               end
             end
             if not param_info[car(bi).macro_token] then
-              error "body contains a parameter that isn't in the head"
+              my_err(car(bi), "body contains a parameter that isn't in the head")
             end
             
             param_type = param_info[car(bi).macro_token].type
@@ -1045,7 +1052,7 @@ local function macro_match(datac,macro)
       --      dest=cons(body[bi],dest)
 --            print('>>',car(bi).macro_token)
           elseif not param_type then 
-             error(' unmatched parameter '..car(bi).macro_token) 
+             my_err (car(bi),' unmatched parameter '..car(bi).macro_token) 
           elseif param_type=='param' then
             table.insert(dest,param_info[car(bi).macro_token].value)
       --      dest=cons(param_info[body[bi].macro_token].value,dest)
