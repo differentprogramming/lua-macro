@@ -42,7 +42,7 @@ local function my_loadstring(string, filename,tokens)
       table.remove(s,1)
       return table.unpack(s,s.n-1)
   end
-  status,ret=loadfile(filename)
+  status,ret=loadstring(string,"ignore this line")
   if not status then my_hander(ret) end
 --  print ('the status is "' .. tostring(status) ..'"')
   return my_do
@@ -163,6 +163,7 @@ local function pp_macro(lines,line_number,filename)
 --    local filename = nil
     if not filename and car(start).token then filename = car(start).token.filename end
    local macro = my_dostring('return('..concat_cons(ret,'\n')..')', filename, cdr(start));
+   if not macro then my_err(car(start), 'syntax error in table definition for macro') end
    add_macro(macro,macros, filename,car(start).token.from_line)
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
@@ -351,6 +352,8 @@ local function skip_apply(l, store, filename)
    local filename=nil
    if l.token then filename=l.token.filename end
    local temp_macros = my_dostring('return('..concat_cons(ret,'\n')..')', filename, tokens);
+   if not temp_macros then my_err(car(nl), 'syntax error in table definition for macro for #apply') end
+  
    for i = 1,#temp_macros do
      add_macro(temp_macros[i],where_struct_goes[2],filename)  --
    end
