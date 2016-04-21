@@ -267,8 +267,8 @@ end
 local function tokenize_all(input,filename)
   if not input or 0==#input then return false, {}, {} end
 local pos=1
-local x=1
-local line=1
+local x=0
+local line=0
 local source={}
 local meaningful={}
 local error_pos=false

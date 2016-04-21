@@ -118,27 +118,50 @@ end
 my_err= function (mtoken,err)
   local line=' '
   err=err or 'error'
-  print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) )  
-  if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.from_line)..' ' end
-  io.stderr:write(file_path(mtoken).. line .. err)
+  if mtoken.token then
+    print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) ) 
+  else
+    print('macro token '.. mtoken.macro_token ) 
+  end
+  if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.from_line+1)..':'..tostring(mtoken.token.from_x+1)..':' end
+  io.stderr:write(file_path(mtoken).. line .. err .. '\n')
   os.exit(1)
 end
---lines has a 
-local function pp_macro(lines,line_number) 
+
+local function pp_require(lines,line_number,filename)
+  local start = lines[line_number]
+  local splice_first = start[1] -- can be 'Cons' on the first element
+  if cadr(start).type ~= 'String' then
+    my_err(cadr(start),'name of a file expected after #require, " or \' expected')
+  end--{}{}{}
+  local nl = cdr(start)
+  require(cadr(start).token.processed)
+  if splice_first~= 'Cons' then 
+    splice_first[3]=cdr(nl)
+    cdr(nl)[1]=splice_first
+  else
+    start[3]=cdr(nl)
+    cdr(nl)[1]=start
+    car(start).macro_token=''
+  end
+  return car(nl).token.from_line+1
+end
+
+local function pp_macro(lines,line_number,filename) 
   local start = lines[line_number]
   local splice_first = start[1] -- can be 'Cons' on the first element
   if cadr(start).macro_token ~= '{' then
-    my_err(start,'struct of macro expected after #macro, { expected')
+    my_err(cadr(start),'struct of macro expected after #macro, { expected')
   end
     local s,nl
     s,nl=read_match_to(cddr(start),'}')
     if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after #macro, } expected')
  end
     local ret = strip_tokens_from_list(sublist_to_list( {cdr(start),nl} ))
-    local filename = nil
-    if car(start).token then filename = car(start).token.filename end
+--    local filename = nil
+    if not filename and car(start).token then filename = car(start).token.filename end
    local macro = my_dostring('return('..concat_cons(ret,'\n')..')', filename, cdr(start));
-   add_macro(macro)
+   add_macro(macro,macros, filename,car(start).token.from_line)
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
     cdr(nl)[1]=splice_first
@@ -172,7 +195,7 @@ preprocessor_tokens =  setmetatable({
 ['#endif']=pp_null_fn,
 ['#section']=pp_null_fn,
 ['#fileout']=pp_null_fn,
-['#require']=pp_null_fn,
+['#require']=pp_require,
 ['#macro']=pp_macro,
 }, { __index = function (_,v) return pp_null_fn end})
 
@@ -248,12 +271,19 @@ local function string_to_source_array(str,filename)
   end
 end
 
+local function simple_copy(obj)
+  local copy={}
+  for i,v in pairs(obj) do copy[i]=v end
+  return setmetatable(copy,getmetatable(obj))
+end
+
 local function string_to_token_array(str, filename)
   local error_pos, source, meaningful =tokenizer.tokenize_all(str, filename)
   if not error_pos then
     local flatten={}
-    for a = 1,#meaningful do 
-      table.insert(flatten, {macro_token=simple_translate[source[meaningful[a]].value], type = source[meaningful[a]].type}) 
+    for a = 1,#meaningful do
+      local token = source[meaningful[a]]
+      table.insert(flatten, {macro_token=simple_translate[token.value], type = token.type, token=token}) 
     end 
     return flatten
   end
@@ -293,7 +323,7 @@ local function skip_one(l)
   return l
 end
 
-local function skip_apply(l, store, outer)
+local function skip_apply(l, store, filename)
   l=cdr(l)
   if car(l).macro_token ~='(' then error '( expected after #apply ' end
   l=cdr(l)
@@ -315,7 +345,7 @@ local function skip_apply(l, store, outer)
    if l.token then filename=l.token.filename end
    local temp_macros = my_dostring('return('..concat_cons(ret,'\n')..')', filename, tokens);
    for i = 1,#temp_macros do
-     add_macro(temp_macros[i],where_struct_goes[2])
+     add_macro(temp_macros[i],where_struct_goes[2],filename)  --
    end
    where_struct_goes[3]=l
   else
@@ -756,7 +786,7 @@ local function apply_inner_macros(macros_dest,params,params_info)
   table.insert(macros_dest,dest)
 end
 
-validate_params= function (head, is_head)
+validate_params= function (head, is_head,filename)
   if not head then
     print 'wat'
   end
@@ -777,7 +807,7 @@ validate_params= function (head, is_head)
     local apply_struct
     if is_param then 
       local apply_struct
-      head,apply_struct=skip_param_tokens[is_param](head,true)
+      head,apply_struct=skip_param_tokens[is_param](head,true,filename)
 --      if apply_struct then 
 --        print('#apply on these macros:',apply_struct) 
 --      end
@@ -808,6 +838,17 @@ scan_head_forward= function(head)
   error('macro must have a constant token:'.. head)
 end
 
+local function set_token_list_line(l,line)
+  while not nullp(l) do
+    local t=car(l)
+    t.token.from_line=line
+    t.token.from_x=0
+    t.token.to_line=line
+    t.token.to_x=0
+    l=cdr(l)
+  end
+end
+
 --[[Possibly params
 new_tokens,
 head (required)
@@ -816,16 +857,18 @@ body / (can be a function)
 sections = {section_name (can be functions)...}}
 macros_dest is optional
 ]]
-add_macro= function (params, macros_dest)
+add_macro= function (params, macros_dest,filename,line)
   
   local dest = {}
   if not params.head then error  'macros have to have a head' end
-  dest.head=array_to_list(string_to_token_array(params.head))
+  dest.head=array_to_list(string_to_token_array(params.head,filename))
+      if line then set_token_list_line(dest.head,line) end  
   if params.body then
     if type(params.body) == 'function'  then
       dest.body = params.body
     else
-      dest.body=array_to_list(string_to_token_array(params.body or {}))
+      dest.body=array_to_list(string_to_token_array(params.body or {},filename))
+      if line then set_token_list_line(dest.body,line) end
     end
   end
   if params.semantic_function and type(params.semantic_function)~='function' then
@@ -835,20 +878,20 @@ add_macro= function (params, macros_dest)
   dest.new_tokens = params.new_tokens
   dest.sections = params.section
     
-  validate_params(dest.head,true)
+  validate_params(dest.head,true,filename)
   dest.handle, dest.handle_offset = scan_head_forward(dest.head)
 --  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
 --you know what, there's no reason for a limit on how far forward a macro
 --can match, it just means the rescan has to go that far.
 --  scan_head_backward(dest.head)
 
-  validate_params(dest.body)
+  validate_params(dest.body,false,filename)
   
   if params.sections then
     dest.sections={}
     for k,v in pairs(params.sections) do
       dest.sections[k]=array_to_list( string_to_token_array(v))
-      validate_params(dest.sections[k])
+      validate_params(dest.sections[k],false,filename)
     end
   end  
   add_tokens(dest.new_tokens)
@@ -1120,7 +1163,7 @@ local function process(str,filename)
 --      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
 --    end
     if lines[i] ~= 0 then
-      i = preprocessor_tokens[car(lines[i]).macro_token](lines,i) -- returns the next line to process
+      i = preprocessor_tokens[car(lines[i]).macro_token](lines,i,filename) -- returns the next line to process
     else
       i=i+1
     end
@@ -1147,7 +1190,7 @@ local function load(modulename)
     local file = io.open(filename, "rb")
     if file then
       -- Compile and return the module      print('here!')
-      local string, tokens = process(assert(file:read("*a")))
+      local string, tokens = process(assert(file:read("*a")),filename)
       return assert(my_loadstring(string, filename,tokens))
     end
     errmsg = errmsg.."\n\tno file '"..filename.."' (checked with custom loader)"

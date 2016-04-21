@@ -1,4 +1,5 @@
 
+#require 'macrotest'
 
 local foo = [| a,b | @(10*a+b) |]
 
@@ -31,6 +32,7 @@ print('returned '..(function()
   END
 end)())
   
+display(macro1(1),5)  
   
 #macro {new_tokens={'amb','endamb','inner_amb'},
   head=[[local amb ?id = ( ?()...first , ?,...rest ) ?,...statements endamb]],
