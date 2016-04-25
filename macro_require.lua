@@ -4,12 +4,22 @@ tokenizer=require 'simple_tokenizer'
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
 local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
-local my_err
+local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render
 
 local function insure_subtable_exists(original_table,field)
   if not original_table.field then original_table.field={} end
 end
 
+-- table_path_get(t,'a','b','c') is t.a.b.c returning nil if any level does not exist
+local function table_path_get(r, ...)
+  local len=select('#',...)
+  for i = 1, len do
+    if not r then return nil end
+    local selector=select(i,...)
+    r=r[selector]
+  end
+  return r
+end
 local function my_loadstring(string, filename,tokens)
 
   if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
@@ -81,7 +91,7 @@ local function my_dostring(string, filename, tokens)
   return ret
 end
 
-function array_to_set_table(a)
+local function array_to_set_table(a)
   if type(a)~='table' then return a end
   local t={}
   for _,v in ipairs(a) do
@@ -111,8 +121,7 @@ simple_translate = setmetatable(
 local function pp_null_fn(lines, line_number) return line_number+1 end
 
 local function file_path(mtoken)
-  if mtoken and mtoken.token and mtoken.token.filename then return mtoken.token.filename end 
-  return '¯\\_(ツ)_/¯'
+  return table_path_get(mtoken,'token','filename') or '¯\\_(ツ)_/¯'
 end
 
 my_err= function (mtoken,err)
@@ -122,7 +131,7 @@ my_err= function (mtoken,err)
     if mtoken.token then
       print('token '.. mtoken.macro_token .. ' filename ' .. tostring(mtoken.token.filename) .. ' line '.. tostring(mtoken.token.from_line) ) 
     else
-      print('macro token '.. mtoken.macro_token ) 
+      print('macro token '.. tostring(mtoken) ) 
     end
   end
   if mtoken and mtoken.token then line= ':'..tostring(mtoken.token.from_line+1)..':'..tostring(mtoken.token.from_x+1)..':' end
@@ -159,10 +168,10 @@ local function pp_macro(lines,line_number,filename)
     s,nl=read_match_to(cddr(start),'}')
     if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after #macro, } expected')
  end
-    local ret = strip_tokens_from_list(sublist_to_list( {cdr(start),nl} ))
+    local ret = sublist_to_list( {cdr(start),nl} )
 --    local filename = nil
     if not filename and car(start).token then filename = car(start).token.filename end
-   local macro = my_dostring('return('..concat_cons(ret,'\n')..')', filename, cdr(start));
+   local macro = my_dostring('return('..render(ret)..')', filename, cdr(start));
    if not macro then my_err(car(start), 'syntax error in table definition for macro') end
    add_macro(macro,macros, filename,car(start).token.from_line)
   if splice_first~= 'Cons' then 
@@ -260,36 +269,80 @@ local function no_source_token(t)
   return {macro_token=t}
 end
 
-local function string_to_source_array(str,filename)
-  local error_pos, source, meaningful =tokenizer.tokenize_all(str,filename)
+
+local function string_to_source_array(str,filename,err_handler)
+  local error_pos, source, meaningful =tokenizer.tokenize_all(str,filename,err_handler)
   if not error_pos then
     local flatten={}
+    local prevx,prevy,indent=0,0,0
     for a = 1,#meaningful do 
-      local value =source[meaningful[a]].value
       local ttype = source[meaningful[a]].type
-      table.insert(flatten, {macro_token=simple_translate[value],type=ttype,token=source[meaningful[a]]}) 
+      local value
+      local token=source[meaningful[a]]
+      if ttype=='String' then
+        --we don't want to find escape sequences in our strings, so we use the processed version
+        value='[=======['..source[meaningful[a]].processed..']=======]'
+      else
+        value=source[meaningful[a]].value
+      end
+      local dy=token.from_line-prevy
+      prevy=token.to_line
+      local dx,first
+      if dy ~= 0 then
+        dx=token.from_x
+        indent = dx
+        first=true
+      else
+        dx=token.from_x-prevx
+        first=false
+      end
+      prevx=token.to_x
+      table.insert(flatten, {first = first,macro_token=simple_translate[value],type=ttype,token=token,dx=dx,dy=dy,indent=indent, splice=false, indent_delta=0}) 
 --      print('y = '..tostring( flatten[#flatten].token.from_line )..'\t x = '.. tostring( flatten[#flatten].token.from_x))
     end 
     return flatten
   end
 end
 
-local function simple_copy(obj)
+local function splice(original_head_list, new_head_array, concat_list)
+  if #new_head_array == 0 then return concat_list end
+  local indent 
+  local indent_delta 
+  if nullp(original_head_list) then
+    indent = (new_head_array[1].indent or car(concat_list).indent or 0)
+    indent_delta = 0
+  else
+    indent =car(original_head_list).indent+car(original_head_list).indent_delta
+    indent_delta = indent-((new_head_array[1].indent or 0) + (new_head_array[1].indent_delta or 0))
+  end
+  local l=concat_list or Nil
+  if new_head_array then 
+    for i=#new_head_array,1,-1 do
+--      if not new_head_array[i].indent then
+--        print 'wat'
+--      end
+      assert (new_head_array[i].indent)
+      new_head_array[i].indent_delta=(new_head_array[i].indent_delta or 0)+indent_delta
+      l=cons(new_head_array[i],l)
+    end
+    car(l).splice=true
+    car(l).first=true
+    car(l).dy=1
+    car(l).dx=car(l).indent
+    if concat_list and not concat_list[1].first then
+      car(concat_list).splice=true
+      car(concat_list).first=true
+      car(concat_list).dy=1
+      car(concat_list).dx=car(concat_list).indent
+    end    
+  end
+  return l
+end
+simple_copy = function (obj)
+  if type(obj) ~= 'table' then return obj end
   local copy={}
   for i,v in pairs(obj) do copy[i]=v end
   return setmetatable(copy,getmetatable(obj))
-end
-
-local function string_to_token_array(str, filename)
-  local error_pos, source, meaningful =tokenizer.tokenize_all(str, filename)
-  if not error_pos then
-    local flatten={}
-    for a = 1,#meaningful do
-      local token = source[meaningful[a]]
-      table.insert(flatten, {macro_token=simple_translate[token.value], type = token.type, token=token}) 
-    end 
-    return flatten
-  end
 end
 
 --[[
@@ -344,14 +397,14 @@ local function skip_apply(l, store, filename)
       my_err(car(nl) ', expected after #apply({macros...} ') 
     end
     --{}{}{} could use formatting
-    ret = strip_tokens_from_list(sublist_to_list( {l,nl},1 ))
+    ret = sublist_to_list( {l,nl},1 )
     local tokens = l
     l=cdr(nl);
     --concat_cons(ret,' ');
    where_struct_goes[2]={}
    local filename=nil
    if l.token then filename=l.token.filename end
-   local temp_macros = my_dostring('return('..concat_cons(ret,'\n')..')', filename, tokens);
+   local temp_macros = my_dostring('return('..render(ret)..')', filename, tokens);
    if not temp_macros then my_err(car(nl), 'syntax error in table definition for macro for #apply') end
   
    for i = 1,#temp_macros do
@@ -458,7 +511,7 @@ cdr= function(n)
   return n[3] 
 end
 
-local function cons(first, rest)
+cons = function (first, rest)
 return setmetatable({'Cons',first,rest},
   {__tostring = cons_tostring,
    __concat= function(op1,op2) return tostring(op1) .. tostring(op2) end,
@@ -474,6 +527,9 @@ return setmetatable({'Cons',first,rest},
 end
 
 local function reverse_transfer_one_in_place(dest,source)
+  if source==nil then
+    print 'wat'
+  end
   if not nullp(source) then 
     dest,source,source[3] = source,source[3],dest
   end
@@ -506,6 +562,7 @@ local function array_to_list(a, concat)
   end
   return l
 end
+
 local function append_list_to_array(a,l)
   while not nullp(l) do
     table.insert(a,car(l))
@@ -570,6 +627,49 @@ concat_cons= function(l,v)
   local dest = {}
   while not nullp(l) do table.insert(dest,l[2]) l=l[3] end
   return table.concat(dest,v)
+end
+
+render= function (l)
+  d={}
+  local next_line = true
+  while not nullp(l) do
+    local t=car(l)
+    local i,p
+    i=t.indent+t.indent_delta
+    if  i<0 then i=0 end
+    if t.first then next_line = true end
+    if next_line then
+      table.insert(d,'\n')
+      p=i
+    else
+      p=t.dx
+      if not p or p<1 then p=1 end
+    end
+    table.insert(d, string.rep(' ',p))
+    table.insert(d, t.macro_token)
+    local k=t.token
+ ---[[   
+    while k and k.source[k.source_index+1] and not k.source[k.source_index+1].meaningful do
+      local n = k.source[k.source_index+1]
+      if n.type == "Comment" then 
+        if n.from_line ~= k.to_line then
+          table.insert(d,'\n')
+          table.insert(d,string.rep(' ',i))
+        else
+          p=n.from_line-k.to_line
+          if p<1 then p=1 end
+          table.insert(d,string.rep(' ',p))
+      end
+        table.insert(d,n.value)
+        table.insert(d,'\n')
+      end
+      k=n
+    end
+ --]]         
+    l=cdr(l)  
+    next_line=l.dy 
+  end
+  return table.concat(d,'')
 end
 
 Nil = cons()
@@ -687,6 +787,15 @@ local function sublist_equal(a,b)
   return sublist_end(a,ra) == sublist_end(b,rb)
 end
 
+list_to_array = function(l)
+  local d={}
+  while not nullp(l) do
+    table.insert(d,car(l))
+    l=cdr(l)
+  end
+  return d
+end
+
 local function sublist_to_array(s,endoff)
   local d = {}
   local r=s[1]
@@ -734,26 +843,79 @@ macros=
     
 }
 
-
-local function apply_inner_macros(macros_dest,params,params_info)
-  
-  local function replace_params(l)
+copy_list = function (l)
+  assert(l[1]=='Cons')
 	local d=cons(Nil,Nil)
 	local r=d
 	local p=Nil
 	while not nullp(l) do
-		if macro_params[car(l).macro_token] and params_info[cadr(l).macro_token].value then
-			r[2]=params_info[cadr(l).macro_token].value
-			l=cddr(l)
-		else
-			r[2]=car(l)
-			l=cdr(l)
-		end
+		r[2]=car(l)
+		l=cdr(l)
 		r[3]=cons(Nil,Nil)
 		p=r
 		r=r[3]
 	end
 	p[3]=Nil
+	return d    
+end
+copy_list_and_object = function (l)
+	local d=cons(Nil,Nil)
+	local r=d
+	local p=Nil
+	while not nullp(l) do
+		r[2]=simple_copy(car(l))
+		l=cdr(l)
+		r[3]=cons(Nil,Nil)
+		p=r
+		r=r[3]
+	end
+	p[3]=Nil
+	return d    
+end
+
+
+
+local function apply_inner_macros(macros_dest,params,params_info)
+  
+  local function replace_params(l)
+    l=copy_list(l)
+	local d=l
+  local p=Nil
+	while not nullp(l) do
+		if car(l).macro_token 
+    and macro_params[car(l).macro_token] 
+    and cadr(l).macro_token 
+    and params_info[cadr(l).macro_token] 
+    and params_info[cadr(l).macro_token].value 
+    then
+      local t
+      if params_info[cadr(l).macro_token].value[1]=='Cons' then        
+        t = splice(l,list_to_array(params_info[cadr(l).macro_token].value),cddr(l))
+      else
+        if macro_params[car(l).macro_token] == 'generate var' then
+          if not params_info[cadr(l).macro_token].value then
+              gen_var_counter=gen_var_counter+1
+              params_info[cadr(l).macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
+          end          
+          
+          local k=simple_copy(car(l))
+          k.macro_token = params_info[cadr(l).macro_token].value.macro_token
+          k.type = 'Id'
+          --l[2]=k; l[3]=l[3][3]
+          t= splice(p,{ k },cddr(l))
+        else
+          t= splice(p,{ params_info[cadr(l).macro_token].value},cddr(l))
+        end
+        if not nullp(p) then p[3]=t end
+      end
+      if p==Nil then d=t end
+      p=l
+			l=cddr(l)
+		else
+      p=l
+			l=cdr(l)
+		end
+	end
 	return d
   end
   
@@ -788,7 +950,7 @@ local function apply_inner_macros(macros_dest,params,params_info)
   if params.sections then
     dest.sections={}
     for k,v in pairs(params.sections) do
-      dest.sections[k]=replace_params(array_to_list(string_to_token_array(v)))
+      dest.sections[k]=replace_params(array_to_list(string_to_source_array(v)))
       validate_params(dest.sections[k])
     end
   end  
@@ -871,13 +1033,13 @@ add_macro= function (params, macros_dest,filename,line)
   
   local dest = {}
   if not params.head then error  'macros have to have a head' end
-  dest.head=array_to_list(string_to_token_array(params.head,filename))
+  dest.head=array_to_list(string_to_source_array(params.head,filename))
       if line then set_token_list_line(dest.head,line) end  
   if params.body then
     if type(params.body) == 'function'  then
       dest.body = params.body
     else
-      dest.body=array_to_list(string_to_token_array(params.body or {},filename))
+      dest.body=array_to_list(string_to_source_array(params.body or {},filename))
       if line then set_token_list_line(dest.body,line) end
     end
   end
@@ -900,7 +1062,7 @@ add_macro= function (params, macros_dest,filename,line)
   if params.sections then
     dest.sections={}
     for k,v in pairs(params.sections) do
-      dest.sections[k]=array_to_list( string_to_token_array(v))
+      dest.sections[k]=array_to_list( string_to_source_array(v))
       validate_params(dest.sections[k],false,filename)
     end
   end  
@@ -916,9 +1078,9 @@ end
 
 
 for i,v in ipairs(macros) do
-  add_tokens(v[1])
-  v[2]=string_to_token_array(v[2])
-  v[3]=string_to_token_array(v[3])
+  add_tokens(v.new_tokens)
+  v.head=string_to_source_array(v.head)
+  v.body=string_to_source_array(v.body)
 end
 
 --        processed,replaced_tokens_list,last_replaced_token_list_element =macro_match(flatten,pos,v)
@@ -1072,14 +1234,17 @@ local function macro_match(datac,macro)
 --              print('generating variable',car(bi).macro_token, 'as',param_info[car(bi).macro_token].value )
             end
       --      dest=cons(param_info[body[bi].macro_token].value,dest)
-             table.insert(dest,param_info[car(bi).macro_token].value)
+             local t = simple_copy(car(bi))
+             t.macro_token = param_info[car(bi).macro_token].value.macro_token
+             t.type = dest,param_info[car(bi).macro_token].value.type
+             table.insert(dest,t)
 --             print('>>',param_info[car(bi).macro_token].value)
           else --unused so far
           end
           bi=cdr(bi)
         end --~= apply macro
     end --while
-    return true,c,array_to_list(dest,c)
+    return true,c,splice(datac,dest,c)
   end --function do_body
   if macro.sections then --{}{}{} ignore sections for now
   end
@@ -1115,7 +1280,6 @@ apply_macros = function(macros, flatten)
       done = true
       for i,v in ipairs(macros) do
         local processed,start
-        --{}{}{} start isn't in dest because I reversed the list after adding start
         --a bit of optimization
         --if I can table drive this more it could be more optimized, but
         --how to maintain macro order then?
@@ -1141,8 +1305,12 @@ apply_macros = function(macros, flatten)
   return dest
 end
 
+local function token_error_handler(token)
+  my_err({macro_token=simple_translate[token.value], type = token.type, token=token},'illegal token')
+end
+
 local function process(str,filename)
-  local source_array = string_to_source_array(str,filename)   -- stores simple translated names in macro_token, and the whole token in token
+  local source_array = string_to_source_array(str,filename,token_error_handler)   -- stores simple translated names in macro_token, and the whole token in token
   local source_list=array_to_list(source_array)               -- convert to sexpr so that it's more efficient to substitute in the middle
                                                               -- source_list will be converted into a double linked list
   local lines = {}                                            -- make array of lines in order to handle preprocessor directives that only appear at the beginning of lines
@@ -1184,13 +1352,13 @@ local function process(str,filename)
   local dest= apply_macros(macros,strip_back_links(source_list))  -- apply global macros. I strip the back links and nulified intial links just so that 
                                                                   -- there can't be any bugs caused by using the back links when they're no longer valid
   --{}{}{} could use formatting
-  local ret=concat_cons(strip_tokens_from_list(dest),'\n')  -- this should be changed to preserve formatting
+  local ret=render(dest,'\n')  -- this should be changed to preserve formatting
 --  print(strip_tokens_from_list( dest))
   return ret,dest
 end
 
 local macro_path = string.gsub(package.path,'%.lua','.pp.lua')
-
+-- Install the loader so that it's callled just before the normal Lua loader
 local function load(modulename)
   local errmsg = ""
   -- Find source
@@ -1207,12 +1375,31 @@ local function load(modulename)
   end
   return errmsg
 end
-
--- Install the loader so that it's callled just before the normal Lua loader
 table.insert(package.loaders, 2, load)
+
+
+
+local function scriptload(modulename)
+  local errmsg = ""
+  -- Find source
+  local modulepath = string.gsub(modulename, "%.", "/")
+  for path in string.gmatch(macro_path, "([^;]+)") do
+    local filename = modulename
+    local file = io.open(filename, "rb")
+    if file then
+      -- Compile and return the module      print('here!')
+      local string, tokens = process(assert(file:read("*a")),filename)
+      return assert(my_loadstring(string, filename,tokens))
+    end
+    errmsg = errmsg.."\n\tno file '"..filename.."' (checked with custom loader)"
+  end
+  return errmsg
+end
+
 
 return {
   add = add_macro,
   add_simple=add_simple_translate,
   load=load,
+  scriptload=scriptload,
   }

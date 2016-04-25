@@ -3,22 +3,24 @@
 
 local foo = [| a,b | @(10*a+b) |]
 
-local amb j = (1+foo(2,5),2+20,3+30,4+40,5+50)
-  print(j)
-endamb
+local amb j = (1+foo(2,5),2+20,3+30,4+40,5+50)  --line 1
+  print(j)                                      --line 2
+endamb                                          --line3
 
   
 print('returned '..(function()   
-  local i,j
-  i=1 
-  WHILE i<=6 DO
+  local i,j --[[a different comment]] --line 4
+  i=1 --line5
+  WHILE i<=6 DO print 'loop 1' TEST
     j=10
     if i==3 then
+-- on it's own line      
       i=i+1
+        --indented on it's own line
       CONTINUE 
     end
     if i==5 then BREAK end
-    WHILE j<=70 DO
+    WHILE j<=70 DO print 'loop 2' TEST
       if j==30 then
         j=j+10
         CONTINUE 
@@ -49,11 +51,11 @@ display(macro1(1),5)
 
 #macro {  
   new_tokens={'WHILE','DO','END', 'BREAK', 'CONTINUE'},
-  head='WHILE ?()...exp DO ?,...statements END',
+  head='WHILE ?()...exp DO ?,...test TEST ?,...statements END',
   body=[[
   local function %loop() 
     if ?exp then
-      #apply({{head='BREAK',body='return("__*done*__")'},
+      #apply({{head='BREAK',body='?test return("__*done*__")'},
       {head='CONTINUE',body='return %loop()'},}, ?statements)
       return %loop()
     end

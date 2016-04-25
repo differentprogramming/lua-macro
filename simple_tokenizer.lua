@@ -38,7 +38,9 @@ local function tokenize(str,x,y,file_pos)
   return ascii_tok[str:byte(file_pos)](str,x,y,file_pos)
 end
 
-local function bad(str,x,y,file_pos) return x+1,y,file_pos+1,'Error',str:sub(file_pos,file_pos),'bad token' end
+local function bad(str,x,y,file_pos) 
+  return x+1,y,file_pos+1,'Error',str:sub(file_pos,file_pos),'bad token' 
+end
 for a=0,255 do ascii_tok[a]=bad end
 
 local function name_tok(str,x,y,file_pos)
@@ -58,7 +60,9 @@ end
 for a=1,#combinable_punctuation do ascii_tok[combinable_punctuation:byte(a,a)]=punct_tok end
 --]]
 local singles='+*/%^#(){}];,'
-local function single(str,x,y,file_pos) local s = str:sub(file_pos,file_pos); return x+1,y,file_pos+1,"Atom",s,s end
+local function single(str,x,y,file_pos) 
+  local s = str:sub(file_pos,file_pos); return x+1,y,file_pos+1,"Atom",s,s 
+end
 for a=1,#singles do ascii_tok[singles:byte(a,a)]=single end
 
 --long strings are processed to convert \r combinations to \n, like the lua manual states
@@ -195,8 +199,8 @@ backslash_char[('x'):byte(1)]=function (pos, str, x, y, curpos, restfn, str_pref
   end
 backslash_char[('z'):byte(1)]=function (pos, str, x, y, curpos, restfn, str_prefix, processed_prefix)
     local tok=str:match("^%s+",curpos+2)
-    local indent,down,proc=nlcr_process(tok,x)
-    str_prefix=str_prefix..'\\z'+proc
+    local proc,indent,down=nlcr_process(tok,x)
+    str_prefix=str_prefix..'\\z'..proc
     return restfn(pos,str,indent,y+down,curpos+2+#tok,str_prefix,processed_prefix)
   end
 local function set_backslash_num(num)
@@ -223,7 +227,10 @@ local function set_string_fn(char)
     if ended==('\\'):byte(1) then return backslash_char[str:byte(curpos+1)](pos,str,x,y,curpos,scan_string,str_prefix,processed_prefix) end
     return x+1,y,curpos+1,'Error',str_prefix,'unfinished string'
   end 
-  ascii_tok[num]=function(str,x,y,pos) return scan_string(pos,str,x+1,y,pos+1,char,'') end
+  ascii_tok[num]=
+    function(str,x,y,pos) 
+      return scan_string(pos,str,x+1,y,pos+1,char,'') 
+    end
 end
 set_string_fn("'")
 set_string_fn('"')
@@ -264,7 +271,7 @@ local function meaningful_tokenize(str,x,y,file_pos)
   return x, y, filepos,tok_type, tok_value, processed
 end
 
-local function tokenize_all(input,filename)
+local function tokenize_all(input,filename, error_handler)
   if not input or 0==#input then return false, {}, {} end
 local pos=1
 local x=0
@@ -274,14 +281,16 @@ local meaningful={}
 local error_pos=false
 repeat
     local new_x, new_line, new_pos,tok_type, tok_value, processed = tokenize(input,x,line,pos)
-  
-  table.insert(source, {from_x=x, to_x=new_x, from_line=line, to_line=new_line, from_pos=pos,to_pos=new_pos-1,type=tok_type, value=tok_value, processed=processed, source_index=#source, filename=filename, source=source, meaningful = not not_meaningful[tok_type] } )
+  table.insert(source, {from_x=x, to_x=new_x, from_line=line, to_line=new_line, from_pos=pos,to_pos=new_pos-1,type=tok_type, value=tok_value, processed=processed, source_index=1+#source, filename=filename, source=source, meaningful = not not_meaningful[tok_type] } )
   pos=new_pos
   x=new_x
   line=new_line
   if not not_meaningful[tok_type] then table.insert(meaningful, #source) end
   
   if not error_pos and tok_type == 'Error' then error_pos=#source end
+  if tok_type == 'Error' and error_handler then 
+    error_handler(source[#source],filename)
+  end
   
 until pos>#input
     return error_pos, source, meaningful
