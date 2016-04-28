@@ -4,10 +4,13 @@ tokenizer=require 'simple_tokenizer'
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
 local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
-local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render
+local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
+
+--local 
+filename2sections = {}
 
 local function insure_subtable_exists(original_table,field)
-  if not original_table.field then original_table.field={} end
+  if not original_table[field] then original_table[field]={} end
 end
 
 -- table_path_get(t,'a','b','c') is t.a.b.c returning nil if any level does not exist
@@ -139,11 +142,69 @@ my_err= function (mtoken,err)
   os.exit(1)
 end
 
-local function pp_require(lines,line_number,filename)
-  local start = lines[line_number]
+local function pp_section(lines,line_number,filename)
+  local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
+  if not filename and car(start).token then filename = car(start).token.filename end
+  
   local splice_first = start[1] -- can be 'Cons' on the first element
   if cadr(start).type ~= 'String' then
-    my_err(cadr(start),'name of a file expected after #require, " or \' expected')
+    my_err(cadr(start),'name of a section expected after @section, " or \' expected')
+  end--{}{}{}
+  local nl = cdr(start)
+  
+  car(start).macro_token='' 
+  cadr(start).macro_token=''
+  
+  insure_subtable_exists(filename2sections,filename)
+  if filename2sections[filename][cadr(start).token.processed] then
+    my_err(cadr(start),'section '..cadr(start).token.processed..' in file '..filename..' already exists.')
+  end
+  
+  filename2sections[filename][cadr(start).token.processed]= {insertion_point = start}
+--  car(start).section = { filename=filename, section_name=cadr(start).token.processed }
+  --table.insert(filename2sections[filename],cadr(start).token.processed)
+  return car(nl).token.from_line+1
+end
+
+local function process_sections(filename)
+  local empty
+  if not filename2sections[filename] then return end
+  repeat
+    empty = true
+    for k,v in pairs(filename2sections[filename]) do
+        macro_list = Nil 
+        for i=1,#v do
+          macro_list = list_append_in_place(v[i],macro_list)
+          empty=false
+        end
+        for i=1,#v do table.remove(v) end
+        if macro_list then
+          macro_list=process(macro_list,filename,'no render')
+        end
+        if v.processed_macros then 
+          v.processed_macros = list_append_in_place(v.processed_macros,macro_list)
+        else
+          v.processed_macros = macro_list
+        end
+    end
+  until empty
+  for k,v in pairs(filename2sections[filename]) do
+  --insert processed now
+    v.insertion_point[3] = list_append_in_place(v.processed_macros,v.insertion_point[3])
+  end
+end
+
+local function section_object_from_token(token) 
+  if not token.section then return nil end
+  return filename2sections[token.section.filename][token.section.section_name]
+end
+
+
+local function pp_require(lines,line_number,filename)
+  local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
+  local splice_first = start[1] -- can be 'Cons' on the first element
+  if cadr(start).type ~= 'String' then
+    my_err(cadr(start),'name of a file expected after @require, " or \' expected')
   end--{}{}{}
   local nl = cdr(start)
   require(cadr(start).token.processed)
@@ -159,14 +220,14 @@ local function pp_require(lines,line_number,filename)
 end
 
 local function pp_macro(lines,line_number,filename) 
-  local start = lines[line_number]
+  local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
   local splice_first = start[1] -- can be 'Cons' on the first element
   if cadr(start).macro_token ~= '{' then
-    my_err(cadr(start),'struct of macro expected after #macro, { expected')
+    my_err(cadr(start),'struct of macro expected after @macro, { expected')
   end
     local s,nl
     s,nl=read_match_to(cddr(start),'}')
-    if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after #macro, } expected')
+    if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after @macro, } expected')
  end
     local ret = sublist_to_list( {cdr(start),nl} )
 --    local filename = nil
@@ -198,28 +259,28 @@ end
 
 
 preprocessor_tokens =  setmetatable({
-['#start']=pp_null_fn,
-['#end']=pp_null_fn,
-['#define']=pp_null_fn,
-['#if']=pp_null_fn,
-['#elseif']=pp_null_fn,
-['#else']=pp_null_fn,
-['#endif']=pp_null_fn,
-['#section']=pp_null_fn,
-['#fileout']=pp_null_fn,
-['#require']=pp_require,
-['#macro']=pp_macro,
+['@start']=pp_null_fn,
+['@end']=pp_null_fn,
+['@define']=pp_null_fn,
+['@if']=pp_null_fn,
+['@elseif']=pp_null_fn,
+['@else']=pp_null_fn,
+['@endif']=pp_null_fn,
+['@section']=pp_section,
+['@fileout']=pp_null_fn,
+['@require']=pp_require,
+['@macro']=pp_macro,
 }, { __index = function (_,v) return pp_null_fn end})
 
 --macros as first class at expand time
 --[==[
- #macro{
+ @macro{
   new_tokens={'WHILE','DO','END','BREAK','CONTINUE'},
   head='WHILE ?()...exp DO ?,...statements END',
   body=[[
   local function %loop() 
     if ?exp then
-      #apply({{head='BREAK',body='return("__*done*__")'},
+      @apply({{head='BREAK',body='return("__*done*__")'},
       {head='CONTINUE',body='return %loop()'},}, ?statements)
       return %loop()
     end
@@ -304,7 +365,10 @@ local function string_to_source_array(str,filename,err_handler)
   end
 end
 
-local function splice(original_head_list, new_head_array, concat_list)
+local function splice_simple(original_head_list, new_head_array, concat_list)
+  if not new_head_array then
+    error("internal")
+  end
   if #new_head_array == 0 then return concat_list end
   local indent 
   local indent_delta 
@@ -338,6 +402,21 @@ local function splice(original_head_list, new_head_array, concat_list)
   end
   return l
 end
+
+local function splice(original_head_list, new_head_array, section, filename)
+  if not filename then return splice_simple(original_head_list, new_head_array, section) end
+  if not filename2sections[filename] then
+    my_err(Nil,'No sections in file '..filename..' have been found.')
+  end
+  local section_table = filename2sections[filename][section]
+  if not section_table then
+        my_err(Nil,'no section '..section..' in file '..filename..' found.')
+  end 
+  local sp= splice_simple(original_head_list, new_head_array,new_end)
+  table.insert(section_table,sp)
+  return sp
+end
+
 simple_copy = function (obj)
   if type(obj) ~= 'table' then return obj end
   local copy={}
@@ -368,11 +447,11 @@ local macro_params={
   --generate var
   ['%']='generate var',
 --  ['%external-load:']='global load', -- also need a 4th entry for saving
-  ['#apply']='apply macros',
+  ['@apply']='apply macros',
 }
 
 add_token_keys(preprocessor_tokens)
-tokenizer.add_special_token('#apply') 
+tokenizer.add_special_token('@apply') 
 
 local function skip_one(l)
   if not nullp(l) then return cdr(l) end
@@ -381,20 +460,20 @@ end
 
 local function skip_apply(l, store, filename)
   l=cdr(l)
-  if car(l).macro_token ~='(' then my_err(car(l), '( expected after #apply ') end
+  if car(l).macro_token ~='(' then my_err(car(l), '( expected after @apply ') end
   l=cdr(l)
   local ret
   local where_struct_goes = l
   if (store) then 
-    if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then my_err(car(l), 'array of macros expected after #apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
+    if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then my_err(car(l), 'array of macros expected after @apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
     local s,nl
     s,nl=read_match_to(l,',')
-    if not s then my_err(car(l), 'array of macros expected after #apply (') end
+    if not s then my_err(car(l), 'array of macros expected after @apply (') end
     if nullp(nl) then
-      my_err(car(l) ', expected after #apply({macros...} ') 
+      my_err(car(l) ', expected after @apply({macros...} ') 
     end
     if car(nl).macro_token ~=',' then 
-      my_err(car(nl) ', expected after #apply({macros...} ') 
+      my_err(car(nl) ', expected after @apply({macros...} ') 
     end
     --{}{}{} could use formatting
     ret = sublist_to_list( {l,nl},1 )
@@ -405,7 +484,7 @@ local function skip_apply(l, store, filename)
    local filename=nil
    if l.token then filename=l.token.filename end
    local temp_macros = my_dostring('return('..render(ret)..')', filename, tokens);
-   if not temp_macros then my_err(car(nl), 'syntax error in table definition for macro for #apply') end
+   if not temp_macros then my_err(car(nl), 'syntax error in table definition for macro for @apply') end
   
    for i = 1,#temp_macros do
      add_macro(temp_macros[i],where_struct_goes[2],filename)  --
@@ -415,11 +494,11 @@ local function skip_apply(l, store, filename)
     l=cdr(l)
   end
   
-  if nullp(l) or not macro_params[car(l).macro_token] then my_err(car(l),'parameter expected after #apply({macros...}, got '.. car(l).macro_token ..' instead') end
+  if nullp(l) or not macro_params[car(l).macro_token] then my_err(car(l),'parameter expected after @apply({macros...}, got '.. car(l).macro_token ..' instead') end
   l=cdr(l)
-  if nullp(l) or car(l).type~='Id' then my_err (car(l),'Id expected after #apply({macros...}, got '.. car(l).macro_token..' type = "'.. tostring( car(l).type) ..'" instead') end
+  if nullp(l) or car(l).type~='Id' then my_err (car(l),'Id expected after @apply({macros...}, got '.. car(l).macro_token..' type = "'.. tostring( car(l).type) ..'" instead') end
   l=cdr(l)
-  if nullp(l) or car(l).macro_token ~=')' then my_err(car(l), ') expected after #apply({macros...},?Id') end
+  if nullp(l) or car(l).macro_token ~=')' then my_err(car(l), ') expected after @apply({macros...},?Id') end
   return cdr(l),where_struct_goes[2],caddr(where_struct_goes)
 end
 
@@ -474,9 +553,6 @@ local ends={
 }
   
 
-local cons_tostring
-
-local Nil;
 --[[
 so here, car is [2]
 cdr is [3]
@@ -492,22 +568,47 @@ local function pairp(n)
     return (not nullp(n)) and listp(n)
 end
 
+last_cell=function(l)
+  while pairp(cdr(l)) do
+    l=cdr(l)
+  end
+  return l
+end
+
 car=function(n)
+  if n==nil then
+    error('car on lua nil')
+  end
   return n[2] 
 end
 cadr=function(n)
+  if n==nil then
+    error('cadr on lua nil')
+  end
   return n[3][2] 
 end
 caddr=function(n)
+  if n==nil then
+    error('caddr on lua nil')
+  end
   return n[3][3][2] 
 end
 cdddr=function(n)
+  if n==nil then
+    error('cdddr on lua nil')
+  end
   return n[3][3][3] 
 end
 cddr=function(n)
+  if n==nil then
+    error('cddr on lua nil')
+  end
   return n[3][3] 
 end
 cdr= function(n)
+  if n==nil then
+    error('cdr on lua nil')
+  end
   return n[3] 
 end
 
@@ -536,7 +637,7 @@ local function reverse_transfer_one_in_place(dest,source)
   return dest,source
 end
 
-local function reverse_list_in_place(l,concat)
+reverse_list_in_place= function (l,concat)
   local d=concat or Nil
   while not nullp(l) do
     l,d,l[3]=l[3],l,d
@@ -544,7 +645,15 @@ local function reverse_list_in_place(l,concat)
   return d
 end
 
-local function reverse_list(l,concat)
+--otherwise known as nconc
+list_append_in_place = function(l,concat)
+  local r=l
+  while r[3]~=Nil do r=r[3] end
+  r[3]=concat
+  return l
+end
+
+reverse_list= function (l,concat)
   local d=concat or Nil
   while not nullp(l) do
     d=cons(l[2],d)
@@ -972,7 +1081,7 @@ validate_params= function (head, is_head,filename)
     end
     local is_param = macro_params[c.macro_token]
     if is_param == 'apply macros' then
-        if is_head then error '#apply can not appear in the head' end
+        if is_head then error '@apply can not appear in the head' end
     elseif is_param and (nullp(cdr(head)) or cadr(head).type ~= 'Id') then 
       my_err (car(head),"identifier missing after match specifier "..c.macro_token .." in head") 
     end
@@ -981,7 +1090,7 @@ validate_params= function (head, is_head,filename)
       local apply_struct
       head,apply_struct=skip_param_tokens[is_param](head,true,filename)
 --      if apply_struct then 
---        print('#apply on these macros:',apply_struct) 
+--        print('@apply on these macros:',apply_struct) 
 --      end
     else 
       head=cdr(head)
@@ -1063,6 +1172,7 @@ add_macro= function (params, macros_dest,filename,line)
     dest.sections={}
     for k,v in pairs(params.sections) do
       dest.sections[k]=array_to_list( string_to_source_array(v))
+      if line then set_token_list_line(dest.sections[k],line) end
       validate_params(dest.sections[k],false,filename)
     end
   end  
@@ -1086,7 +1196,7 @@ end
 --        processed,replaced_tokens_list,last_replaced_token_list_element =macro_match(flatten,pos,v)
 -- needs to return a sublist
 -- returns processed/didn't followed by first element replace followed by last element of macro
-local function macro_match(datac,macro)
+local function macro_match(datac,macro,filename)
   local head=macro.head --array_to_list(macro.head)
   local c,pos=datac,head
   local param_info={} --type=, value=
@@ -1134,7 +1244,7 @@ local function macro_match(datac,macro)
       c=cdr(c)
     elseif macro_params[car(pos).macro_token] then
       local param_type = macro_params[car(pos).macro_token]
-      local param_name=cadr(pos).macro_token -- #apply doesn't appear in the head
+      local param_name=cadr(pos).macro_token -- @apply doesn't appear in the head
       if not param_info[param_name] then 
         param_info[param_name]={type=param_type} 
       end
@@ -1174,7 +1284,7 @@ local function macro_match(datac,macro)
   end
   
   
-  local do_body= function (body)
+  local do_body= function (body,tc,f)
     local dest={} --splices c on after  
     local bi=body 
 --    print("Scanning Body", strip_tokens_from_list( body))
@@ -1192,7 +1302,7 @@ local function macro_match(datac,macro)
           for i=1,#inner_macros do
             apply_inner_macros(temp,inner_macros[i],param_info)
           end
-          temp=apply_macros(temp,param_info[p.macro_token].value)
+          temp=apply_macros(temp,param_info[p.macro_token].value,filename)
           dest=append_list_to_array(dest,temp)
         else
           if param_type_text then  
@@ -1244,9 +1354,24 @@ local function macro_match(datac,macro)
           bi=cdr(bi)
         end --~= apply macro
     end --while
-    return true,c,splice(datac,dest,c)
+    --
+    return true,tc,splice(datac,dest,tc,f)
   end --function do_body
   if macro.sections then --{}{}{} ignore sections for now
+    for section,m in pairs(macro.sections) do
+      if type(m) == 'function' then
+        if not filename2sections[filename] then
+          my_err(cadr(start),'No sections in file '..filename..' have been found.')
+        end
+        local sublist = filename2sections[filename][section]
+        if not sublist then
+              my_err(cadr(start),'no section '..cadr(start).token.processed..' in file '..filename..' found.')
+        end 
+        m(param_info,sublist[2][3])
+      else
+          do_body(m,section,filename)
+      end
+    end
   end
   if macro.semantic_function then
     local sem_return = macro.semantic_function(param_info,c)
@@ -1259,13 +1384,13 @@ local function macro_match(datac,macro)
       if body_ret then return true,body_ret end
       return false,datac 
     else
-      return do_body(macro.body)
+      return do_body(macro.body,c)
     end
   end     
 end
 
 -- this could be written differently if 'list' is always a double linked list
-apply_macros = function(macros, flatten)
+apply_macros = function(macros, flatten,filename)
   flatten=reverse_list_in_place(flatten)                    -- we keep the active portion of the expansion by transfering between a reversed and a forward list
                                                             -- instead of having a double linked list.  
   
@@ -1284,7 +1409,7 @@ apply_macros = function(macros, flatten)
         --if I can table drive this more it could be more optimized, but
         --how to maintain macro order then?
         if v.handle == nthcar(v.handle_offset,dest).macro_token then  -- have we found a macro with the right handle?
-          processed,dest,start=macro_match(dest,v)                    -- if so process the macro
+          processed,dest,start=macro_match(dest,v,filename)                    -- if so process the macro
           if processed then                                           -- if the macro expanded, it did so at the beginning of dest
                                                                       -- dump the whole processed portion back into the reverse list to rescan
             done = false                                             
@@ -1309,49 +1434,61 @@ local function token_error_handler(token)
   my_err({macro_token=simple_translate[token.value], type = token.type, token=token},'illegal token')
 end
 
-local function process(str,filename)
-  local source_array = string_to_source_array(str,filename,token_error_handler)   -- stores simple translated names in macro_token, and the whole token in token
-  local source_list=array_to_list(source_array)               -- convert to sexpr so that it's more efficient to substitute in the middle
-                                                              -- source_list will be converted into a double linked list
+--process as used by process sections just processes a list and returns a list
+--no preprocessing, no rendering to a string
+--this is signaled by no_render not being nil
+
+process =  function(str,filename, no_render)
+  local source_array 
+  local source_list
+  if no_render then
+    source_list = str
+  else
+    source_array = string_to_source_array(str,filename,token_error_handler)   -- stores simple translated names in macro_token, and the whole token in token
+    source_list=array_to_list(source_array)               -- convert to sexpr so that it's more   end
+  end                                                            
   local lines = {}                                            -- make array of lines in order to handle preprocessor directives that only appear at the beginning of lines
                                                               -- 'lines[]' contains pointers into the continuous sexpr in source_list
   local function add_line(i,v)
-    if not lines[i] then
-      while #lines < i do table.insert(lines,0) end
-      lines[i]=v
+    if not lines[i+1] then --plus 1 because I count lines from 0
+      while #lines <= i do table.insert(lines,0) end
+      lines[i+1]=v
     end
   end
   
   local p,prev=source_list,'Cons'                             -- the first element of the double linked list remains a cons cell, It would be better to have a root cell
                                                               -- I currently have to fake changing the first element, and that might not work in all cases.
-  
-  while not nullp(p) do                                       -- turn source_list into a double linked list
-    add_line(car(p).token.from_line,p)
-    p[1]=prev
-    prev=p
-    p=cdr(p)
-  end
-  
-  local i=1
-  while i < #lines do                                         -- handle preprocessor directives that only appear as the first token of lines
---    if lines[i] == 0 then 
---      print('line '..i..' is blank')
---    else
---      print('line '..i.. 'is at ' .. car(lines[i]).token.from_line .. ' is a '.. car(lines[i]).macro_token)
---      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
---    end
-    if lines[i] ~= 0 then
-      i = preprocessor_tokens[car(lines[i]).macro_token](lines,i,filename) -- returns the next line to process
-    else
-      i=i+1
+  if not no_render  then
+    while not nullp(p) do                                       -- turn source_list into a double linked list
+      add_line(car(p).token.from_line,p)
+      p[1]=prev
+      prev=p
+      p=cdr(p)
+    end
+    
+    local i=0 --line numbers and x positions count from 0 
+    while i < #lines do                                         -- handle preprocessor directives that only appear as the first token of lines
+  --    if lines[i] == 0 then 
+  --      print('line '..i..' is blank')
+  --    else
+  --      print('line '..i.. 'is at ' .. car(lines[i]).token.from_line .. ' is a '.. car(lines[i]).macro_token)
+  --      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
+  --    end
+      if lines[i+1] ~= 0 then
+        i = preprocessor_tokens[car(lines[i+1]).macro_token](lines,i,filename) -- returns the next line to process
+      else
+        i=i+1
+      end
     end
   end
 --  print('after preprocess statements are removed, file is [' .. strip_tokens_from_list(source_list) .. ']')
   
 
-  local dest= apply_macros(macros,strip_back_links(source_list))  -- apply global macros. I strip the back links and nulified intial links just so that 
+  local dest= apply_macros(macros,strip_back_links(source_list), filename)  -- apply global macros. I strip the back links and nulified intial links just so that 
                                                                   -- there can't be any bugs caused by using the back links when they're no longer valid
   --{}{}{} could use formatting
+  if no_render then return dest end
+  process_sections(filename)
   local ret=render(dest,'\n')  -- this should be changed to preserve formatting
 --  print(strip_tokens_from_list( dest))
   return ret,dest
