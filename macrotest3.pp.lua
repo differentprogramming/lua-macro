@@ -46,32 +46,32 @@ end
 
 @macro { 
   new_tokens={'define'}, 
-  head= [[define ?fn ( ?,...params ) ?,...code end]],
+  head= [[define ?1fn ( ?,params ) ?,code end]],
   body = [[?fn = function(?params) ?code end]],
   sections= { 
-    define=[[local ?fn='why is this backwards' ]],
-    ['module']=[[?fn = ?fn ,]]
+    define=[[local ?fn ]],
+    module=[[?fn = ?fn ,]]
     } 
   }
   
 display(macro1(1),5)  
   
 @macro {new_tokens={'amb','endamb','inner_amb'},
-  head=[[local amb ?id = ( ?()...first , ?,...rest ) ?,...statements endamb]],
+  head=[[local amb ?id = ( ?first , ?,rest ) ?,statements endamb]],
   body= [[for _,%i in ipairs{ [|| @ ?first |], inner_amb ?rest } do
     local ?id=%i();
     ?statements
    end]]}
    
 @macro {new_tokens={'inner_amb'},head='inner_amb }',body='}'}
-@macro {new_tokens={'inner_amb'},head='inner_amb ?()...a }',body='[||@?a |],}'}
-@macro {new_tokens={'inner_amb'},head='inner_amb ?...first , ?,...rest }',body='[||@?first |], inner_amb ?rest }'}
+@macro {new_tokens={'inner_amb'},head='inner_amb ?a }',body='[||@ ?a |],}'}
+@macro {new_tokens={'inner_amb'},head='inner_amb ?first , ?,rest }',body='[||@?first |], inner_amb ?rest }'}
 
   
 
 @macro {  
   new_tokens={'WHILE','DO','END', 'BREAK', 'CONTINUE'},
-  head='WHILE ?()...exp DO ?,...test TEST ?,...statements END',
+  head='WHILE ?exp DO ?,test TEST ?,statements END',
   body=[[
   local function %loop() 
     if ?exp then
