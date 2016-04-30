@@ -1070,8 +1070,10 @@ local function apply_inner_macros(macros_dest,params,params_info,filename)
       validate_params(dest.sections[k])
     end
   end  
+--  print ('inner macro: offset ='..dest.handle_offset..' handle = '..dest.handle)
   while not macros_dest[dest.handle_offset] do table.insert( macros_dest,{} ) end
-  table.insert(macros_dest[dest.handle_offset],dest)
+  if not macros_dest[dest.handle_offset][dest.handle] then macros_dest[dest.handle_offset][dest.handle]={} end 
+  table.insert(macros_dest[dest.handle_offset][dest.handle],dest)
 end
 
 validate_params= function (head, is_head,filename)
@@ -1190,8 +1192,9 @@ add_macro= function (params, macros_dest,filename,line)
   while not macros_dest[dest.handle_offset] do 
     table.insert(macros_dest,{}) 
   end
-  
-  table.insert(macros_dest[dest.handle_offset],dest)
+  if not macros_dest[dest.handle_offset][dest.handle] then macros_dest[dest.handle_offset][dest.handle]={} end 
+  table.insert(macros_dest[dest.handle_offset][dest.handle],dest)
+
 end
 
 
@@ -1316,8 +1319,10 @@ local function macro_match(datac,macro,filename)
 --          print('++++++++++++++++++++++++++++', inner_macros)
           local temp={}
           for _,i in ipairs(inner_macros) do
-            for _,j in ipairs(i) do --ordered by handle offset
-              if j.head then apply_inner_macros(temp,j,param_info,filename) end
+            for _,j in pairs(i) do --ordered by handle offset
+              for _,k in ipairs(j) do
+                if k.head then apply_inner_macros(temp,k,param_info,filename) end
+              end
             end
           end
           temp=apply_macros(temp,param_info[p.macro_token].value,filename)
@@ -1422,17 +1427,16 @@ apply_macros = function(macros, flatten,filename)
     repeat 
       done = true
       for nth,macros_per_offset in ipairs(macros) do
-        for i,v in ipairs(macros_per_offset) do
-          local processed,start
-          --a bit of optimization
-          --if I can table drive this more it could be more optimized, but
-          --how to maintain macro order then?
-          assert(nth == v.handle_offset)
-          if v.match_debug then
-            print 'match debug in apply_macros'
-          end
-          
-          if v.handle == nthcar(nth,dest).macro_token then  -- have we found a macro with the right handle?
+        local t=macros_per_offset[nthcar(nth,dest).macro_token]
+        if t then 
+          for i,v in ipairs(t) do
+            local processed,start
+            --a bit of optimization
+            --if I can table drive this more it could be more optimized, but
+            --how to maintain macro order then?
+            assert(nth == v.handle_offset)
+            
+            assert( v.handle == nthcar(nth,dest).macro_token)  -- have we found a macro with the right handle?
             processed,dest,start=macro_match(dest,v,filename)                    -- if so process the macro
             if processed then                                           -- if the macro expanded, it did so at the beginning of dest
                                                                         -- dump the whole processed portion back into the reverse list to rescan
