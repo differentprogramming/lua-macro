@@ -6,8 +6,7 @@ local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,cadd
 local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
 local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
 
---local 
-filename2sections = {}
+local filename2sections = {}
 
 local function insure_subtable_exists(original_table,field)
   if not original_table[field] then original_table[field]={} end
@@ -435,15 +434,16 @@ New syntax
 
 local macro_params={
   --input paramsk
-  ['?']='param',
+  ['?1']='param',  
   --input matches till
   ['?...']='param until',
   --input matches till next, also matches () {} [] - stops for comma
   --if the expected next is a comma then that matches
   --if the expected next is not a comma and it finds one, that's a failure
-  ['?()...']='param match until',
+  
+  ['?']='param match until',
   --in matches any number of elements including commas
-  ['?,...']='params',
+  ['?,']='params',
   --generate var
   ['%']='generate var',
 --  ['%external-load:']='global load', -- also need a 4th entry for saving
@@ -452,6 +452,9 @@ local macro_params={
 
 add_token_keys(preprocessor_tokens)
 tokenizer.add_special_token('@apply') 
+tokenizer.add_special_token('@@') --needs a global macro with a function body
+tokenizer.add_special_token('@tostring') --needs a global macro with a function body
+
 
 local function skip_one(l)
   if not nullp(l) then return cdr(l) end
@@ -527,11 +530,11 @@ local match=
   ['{']='}',
   ['[']=']',
   ['do']='end',
-  ['for']='do',
-  ['while']='do',
+  ['for']='do', --special cased to go for 'end' after 'do'
+  ['while']='do', --special cased to go for 'end' after 'do'
   ['if']='end',
   ['function']='end',
-  ['repeat']='until',
+  ['repeat']='until', --really needs to be until exp
 }
 local starts=
 {
@@ -808,15 +811,20 @@ read_match_to = function(token_clist,end_token)
   local r=token_clist
   local len=0
   while not nullp(r) and car(r).macro_token~=end_token do
-    if match[car(r).macro_token] then
+    local m= match[car(r).macro_token]
+    if m then
       local succ,inc
 --      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
-      succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
+      succ,r,inc= read_match_to(cdr(r),m)
       if not succ then 
 --        print('failed inner match')
         return false,token_clist,0 
       end
       len=len+inc+1
+      if m=='do' then
+        if nullp(r) then break end
+        succ,r,inc= read_match_to(cdr(r),'end')
+      end
     end
     r=cdr(r)
     len=len+1
@@ -833,7 +841,7 @@ read_match_to_no_commas= function(token_clist,end_token)
 --print('read match to no commas"', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
   local r=token_clist
   local len=0
-  while not nullp(r) and car(r).macro_token~=end_token and car(r).macro_token~=',' do
+  while not nullp(r) and car(r).macro_token~=end_token and car(r).macro_token~=','and car(r).macro_token~=';' do
     if match[car(r).macro_token] then
       local succ,inc
 --      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
@@ -949,7 +957,6 @@ end
 
 macros=
 {
-    
 }
 
 copy_list = function (l)
@@ -984,7 +991,7 @@ end
 
 
 
-local function apply_inner_macros(macros_dest,params,params_info)
+local function apply_inner_macros(macros_dest,params,params_info,filename)
   
   local function replace_params(l)
     l=copy_list(l)
@@ -1036,7 +1043,7 @@ local function apply_inner_macros(macros_dest,params,params_info)
   if params.body then
     if type(params.body) == 'function'  then
       dest.body = params.body
-    else
+    else;
       dest.body=replace_params(params.body or {})--replace_params(array_to_list(string_to_token_array(params.body or {})))
     end
   end
@@ -1063,8 +1070,8 @@ local function apply_inner_macros(macros_dest,params,params_info)
       validate_params(dest.sections[k])
     end
   end  
-  
-  table.insert(macros_dest,dest)
+  while not macros_dest[dest.handle_offset] do table.insert( macros_dest,{} ) end
+  table.insert(macros_dest[dest.handle_offset],dest)
 end
 
 validate_params= function (head, is_head,filename)
@@ -1114,7 +1121,8 @@ scan_head_forward= function(head)
     else
       return c.macro_token,i
     end
-    if is_param then i=i+2 else i=i+1 end
+    i=i+1
+    if is_param then head=cddr(head) else head=cdr(head) end
   end
   my_err (car(head),'macro must have a constant token:'.. head)
 end
@@ -1178,7 +1186,12 @@ add_macro= function (params, macros_dest,filename,line)
   end  
   add_tokens(dest.new_tokens)
   
-  table.insert(macros_dest or macros,dest)
+  macros_dest = macros_dest or macros
+  while not macros_dest[dest.handle_offset] do 
+    table.insert(macros_dest,{}) 
+  end
+  
+  table.insert(macros_dest[dest.handle_offset],dest)
 end
 
 
@@ -1200,6 +1213,9 @@ local function macro_match(datac,macro,filename)
   local head=macro.head --array_to_list(macro.head)
   local c,pos=datac,head
   local param_info={} --type=, value=
+  if macro.match_debug then
+    print('match debug')
+  end
   
   --reading into parameters in the head
   --if they already have values, then verifying that they match
@@ -1299,8 +1315,10 @@ local function macro_match(datac,macro,filename)
           bi,inner_macros,p= skip_param_tokens[param_type_text](bi)
 --          print('++++++++++++++++++++++++++++', inner_macros)
           local temp={}
-          for i=1,#inner_macros do
-            apply_inner_macros(temp,inner_macros[i],param_info)
+          for _,i in ipairs(inner_macros) do
+            for _,j in ipairs(i) do --ordered by handle offset
+              if j.head then apply_inner_macros(temp,j,param_info,filename) end
+            end
           end
           temp=apply_macros(temp,param_info[p.macro_token].value,filename)
           dest=append_list_to_array(dest,temp)
@@ -1403,25 +1421,32 @@ apply_macros = function(macros, flatten,filename)
                                                             -- eventually we should optimize this, but we have to keep the macros in order so it won't be simple
     repeat 
       done = true
-      for i,v in ipairs(macros) do
-        local processed,start
-        --a bit of optimization
-        --if I can table drive this more it could be more optimized, but
-        --how to maintain macro order then?
-        if v.handle == nthcar(v.handle_offset,dest).macro_token then  -- have we found a macro with the right handle?
-          processed,dest,start=macro_match(dest,v,filename)                    -- if so process the macro
-          if processed then                                           -- if the macro expanded, it did so at the beginning of dest
-                                                                      -- dump the whole processed portion back into the reverse list to rescan
-            done = false                                             
-            --set rescan back by the whole macro
-            --is it possible that it sets up less than a whole macro?  
-            --rescan from the end of the new substitution
-            while start~=dest do
-              flatten, start = reverse_transfer_one_in_place(flatten,start)
---              flatten=cons(car(start),flatten)
---              start=cdr(start)
+      for nth,macros_per_offset in ipairs(macros) do
+        for i,v in ipairs(macros_per_offset) do
+          local processed,start
+          --a bit of optimization
+          --if I can table drive this more it could be more optimized, but
+          --how to maintain macro order then?
+          assert(nth == v.handle_offset)
+          if v.match_debug then
+            print 'match debug in apply_macros'
+          end
+          
+          if v.handle == nthcar(nth,dest).macro_token then  -- have we found a macro with the right handle?
+            processed,dest,start=macro_match(dest,v,filename)                    -- if so process the macro
+            if processed then                                           -- if the macro expanded, it did so at the beginning of dest
+                                                                        -- dump the whole processed portion back into the reverse list to rescan
+              done = false                                             
+              --set rescan back by the whole macro
+              --is it possible that it sets up less than a whole macro?  
+              --rescan from the end of the new substitution
+              while start~=dest do
+                flatten, start = reverse_transfer_one_in_place(flatten,start)
+  --              flatten=cons(car(start),flatten)
+  --              start=cdr(start)
+              end
+              break -- should always scan macros in order!
             end
-            break -- should always scan macros in order!
           end
         end
       end
