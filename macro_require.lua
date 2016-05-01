@@ -63,9 +63,9 @@ end
 local function my_dostring(string, filename, tokens)
 
   if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
-  local file=io.open(filename,"w")
-  file:write(string)
-  file:close()
+--  local file=io.open(filename,"w")
+--  file:write(string)
+--  file:close()
   local function my_hander(err)
 --    print('in handler '..tostring(err))
     local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
@@ -85,7 +85,9 @@ local function my_dostring(string, filename, tokens)
   end
   local ret
   local function my_do()
-      ret=dofile(filename)
+ --     ret=dofile(filename)
+    ret=assert(loadstring(string))()
+    
   end
   local status = xpcall(my_do,my_hander)
 
@@ -403,6 +405,7 @@ local function splice_simple(original_head_list, new_head_array, concat_list)
 end
 
 local function splice(original_head_list, new_head_array, section, filename)
+  --Note, in the first case "section" is the concat list not the section
   if not filename then return splice_simple(original_head_list, new_head_array, section) end
   if not filename2sections[filename] then
     my_err(Nil,'No sections in file '..filename..' have been found.')
@@ -411,7 +414,7 @@ local function splice(original_head_list, new_head_array, section, filename)
   if not section_table then
         my_err(Nil,'no section '..section..' in file '..filename..' found.')
   end 
-  local sp= splice_simple(original_head_list, new_head_array,new_end)
+  local sp= splice_simple(original_head_list, new_head_array) 
   table.insert(section_table,sp)
   return sp
 end
@@ -742,7 +745,16 @@ concat_cons= function(l,v)
 end
 
 render= function (l)
-  d={}
+  local d={}
+  while not nullp(l) do
+    table.insert(d, car(l).macro_token)
+    l=cdr(l)  
+  end
+  return table.concat(d,'\n')
+end
+--[=[  
+  local d={}
+ -- local render_line,render_x = 0,0
   local next_line = true
   while not nullp(l) do
     local t=car(l)
@@ -783,6 +795,7 @@ render= function (l)
   end
   return table.concat(d,'')
 end
+--]=]
 
 Nil = cons()
 Nil[2]=Nil
@@ -958,6 +971,7 @@ end
 macros=
 {
 }
+
 
 copy_list = function (l)
   assert(l[1]=='Cons')
@@ -1176,7 +1190,9 @@ add_macro= function (params, macros_dest,filename,line)
 --can match, it just means the rescan has to go that far.
 --  scan_head_backward(dest.head)
 
-  validate_params(dest.body,false,filename)
+  if type(dest.body) ~= 'function' then
+    validate_params(dest.body,false,filename)
+  end
   
   if params.sections then
     dest.sections={}
@@ -1196,6 +1212,41 @@ add_macro= function (params, macros_dest,filename,line)
   table.insert(macros_dest[dest.handle_offset][dest.handle],dest)
 
 end
+
+local function token_copy(token)
+  local t=simple_copy(token)
+  t.token=simple_copy(t.token)
+  return t
+end
+
+
+local splice_body = array_to_list(string_to_source_array('?a ?b'))
+add_macro({ head='?1a @@ ?1b', 
+    body= function(param_info,c,do_body)
+      local ok,s,ret,n = do_body(splice_body,c)
+      if ok then
+        ret[2]=token_copy(ret[2])
+        car(ret).macro_token = car(ret).macro_token .. cadr(ret).macro_token
+        ret[3]=ret[3][3]
+        car(ret).type = 'Id'
+      end
+      return ok,s,ret,n
+     end })
+
+local tostring_body = array_to_list(string_to_source_array('"dummy" ?a'))
+
+add_macro({ head='@tostring(?1a)', 
+    body= function(param_info,c,do_body)
+      local ok,s,ret,n = do_body(tostring_body,c)
+      if ok then
+        ret[2]=token_copy(ret[2])
+        car(ret).macro_token = '[======['..cadr(ret).macro_token..']======]'
+        car(ret).token.processed = cadr(ret).macro_token
+        car(ret).token.value = car(ret).macro_token
+        ret[3]=ret[3][3]
+      end
+      return ok,s,ret,n
+     end })
 
 
 local function add_simple_translate(m,t)
@@ -1403,8 +1454,8 @@ local function macro_match(datac,macro,filename)
   end
   if macro.body then
     if type(macro.body) == 'function' then
-      local body_ret = macro.body(param_info,c)
-      if body_ret then return true,body_ret end
+      local body_ret,b,c = macro.body(param_info,c,do_body)
+      if body_ret then return body_ret,b,c end
       return false,datac 
     else
       return do_body(macro.body,c)
@@ -1518,7 +1569,7 @@ process =  function(str,filename, no_render)
   --{}{}{} could use formatting
   if no_render then return dest end
   process_sections(filename)
-  local ret=render(dest,'\n')  -- this should be changed to preserve formatting
+  local ret=render(dest,'\n') 
 --  print(strip_tokens_from_list( dest))
   return ret,dest
 end
