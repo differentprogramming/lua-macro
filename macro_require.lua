@@ -1,4 +1,6 @@
 tokenizer=require 'simple_tokenizer'
+--comment out to have debugging autostart
+started_debugging=true
 --local serpent = require("serpent")
 --require 'class'
 --forward references
@@ -7,7 +9,6 @@ local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_hea
 local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
 
 local filename2sections = {}
-
 local function insure_subtable_exists(original_table,field)
   if not original_table[field] then original_table[field]={} end
 end
@@ -22,14 +23,36 @@ local function table_path_get(r, ...)
   end
   return r
 end
-local function my_loadstring(string, filename,tokens)
 
-  if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
-  local file=io.open(filename,"w")
+codemap = {}
+
+local function fill_codemap(filename, tokens)
+  filename='@'..filename
+  insure_subtable_exists(codemap,filename)
+  local t=tokens
+  local ti=1
+  local di=1
+  local cmap=codemap[filename]
+  while not nullp(t) do
+    local token = car(t)
+    if token.token and token.token.from_line then 
+      di=token.token.from_line+1 
+    end
+    cmap[ti]=di
+    ti=ti+1
+    t=cdr(t)
+  end
+  
+end
+
+local function my_loadstring(string, filename,tokens)
+  fill_codemap(filename,tokens)
+  if not filename then filename = 'macro_temp.lua' end
+--  local file=io.open(filename,"w")
 --  file:write('return((')
-  file:write(string)
+--  file:write(string)
 --  file:write(')())')
-  file:close()
+--  file:close()
   local function my_hander(err)
     print('in handler '..tostring(err))
     local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
@@ -54,7 +77,14 @@ local function my_loadstring(string, filename,tokens)
       table.remove(s,1)
       return table.unpack(s,s.n-1)
   end
-  status,ret=loadstring(string,"ignore this line")
+  if not started_debugging then
+    started_debugging = true
+    
+  
+    require('mobdebug').start()
+  end
+ --editor.autoactivate=true
+  status,ret=loadstring(string,"@"..filename)
   if not status then my_hander(ret) end
 --  print ('the status is "' .. tostring(status) ..'"')
   return my_do
@@ -62,7 +92,8 @@ end
 
 local function my_dostring(string, filename, tokens)
 
-  if filename then filename = filename .. '.macro_temp.lua' else filename = 'macro_temp.lua' end
+  if not filename then filename = 'macro_temp.lua' end
+  fill_codemap(filename,tokens)
 --  local file=io.open(filename,"w")
 --  file:write(string)
 --  file:close()
@@ -86,7 +117,7 @@ local function my_dostring(string, filename, tokens)
   local ret
   local function my_do()
  --     ret=dofile(filename)
-    ret=assert(loadstring(string))()
+    ret=assert(loadstring(string,'@'..filename))()
     
   end
   local status = xpcall(my_do,my_hander)

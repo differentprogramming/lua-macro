@@ -26,10 +26,18 @@ intr.frun = function(self,wfilename,rundebug)
       filepath = shortpath
     end
   end
+local init = [=[
+(loadstring or load)([[
+if pcall(require, "mobdebug") then
+  local mdb = require "mobdebug"
+  mdb.linemap = function(line, src)  print("line",line, tostring(codemap[src][line]),'src','"'..src..'"') return codemap[src][line] or line end
+end
+]])()
+]=]
 
   if rundebug then
-    DebuggerAttachDefault({runstart = ide.config.debugger.runonstart == true})
-
+   
+    DebuggerAttachDefault({init = init,runstart = ide.config.debugger.runonstart == true})
     -- update arg to point to the proper file
     rundebug = ('if arg then arg[0] = [[%s]] end '):format(filepath)..rundebug
 
@@ -43,6 +51,8 @@ intr.frun = function(self,wfilename,rundebug)
     end
     f:write(rundebug)
     f:close()
+  else 
+    DebuggerAttachDefault({init = init})
   end
   local params = ide.config.arg.any or ide.config.arg.lua
   local code = ([[-e "io.stdout:setvbuf('no')" "C:\ZeroBrane1.30\lualibs\myppscript.lua" "%s"]]):format(filepath)
