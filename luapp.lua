@@ -30,7 +30,8 @@ local init = [=[
 (loadstring or load)([[
 if pcall(require, "mobdebug") then
   local mdb = require "mobdebug"
-  mdb.linemap = function(line, src)  print("line",line, tostring(codemap[src][line]),'src','"'..src..'"') return codemap[src][line] or line end
+  mdb.linemap = function(line, src)  --print("line",line, tostring(codemap[src][line]),'src','"'..src..'"') 
+  return math.abs(codemap[src][line] or line) end
 end
 ]])()
 ]=]

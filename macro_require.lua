@@ -1,6 +1,6 @@
 tokenizer=require 'simple_tokenizer'
 --comment out to have debugging autostart
-started_debugging=true
+--started_debugging=true
 --local serpent = require("serpent")
 --require 'class'
 --forward references
@@ -26,7 +26,7 @@ end
 
 codemap = {}
 
-local function fill_codemap(filename, tokens)
+local function fill_codemap(filename, tokens,m)
   filename='@'..filename
   insure_subtable_exists(codemap,filename)
   local t=tokens
@@ -36,9 +36,11 @@ local function fill_codemap(filename, tokens)
   while not nullp(t) do
     local token = car(t)
     if token.token and token.token.from_line then 
-      di=token.token.from_line+1 
+      di=(token.token.from_line+1)*m 
     end
-    cmap[ti]=di
+    while #cmap<ti do table.insert(cmap,di) end
+--    cmap[ti]=di
+    if cmap[ti]<di then cmap[ti]=di end
     ti=ti+1
     t=cdr(t)
   end
@@ -46,7 +48,7 @@ local function fill_codemap(filename, tokens)
 end
 
 local function my_loadstring(string, filename,tokens)
-  fill_codemap(filename,tokens)
+  fill_codemap(filename,tokens,1)
   if not filename then filename = 'macro_temp.lua' end
 --  local file=io.open(filename,"w")
 --  file:write('return((')
@@ -93,7 +95,7 @@ end
 local function my_dostring(string, filename, tokens)
 
   if not filename then filename = 'macro_temp.lua' end
-  fill_codemap(filename,tokens)
+  fill_codemap(filename,tokens,-1)
 --  local file=io.open(filename,"w")
 --  file:write(string)
 --  file:close()
@@ -488,6 +490,7 @@ add_token_keys(preprocessor_tokens)
 tokenizer.add_special_token('@apply') 
 tokenizer.add_special_token('@@') --needs a global macro with a function body
 tokenizer.add_special_token('@tostring') --needs a global macro with a function body
+tokenizer.add_special_token('@end') 
 
 
 local function skip_one(l)
@@ -842,7 +845,7 @@ local function read_to(token_clist,end_token)
     r=cdr(r)
     len=len+1
   end
-  if car(r) then 
+  if car(r) or end_token=='@end' then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -873,7 +876,7 @@ read_match_to = function(token_clist,end_token)
     r=cdr(r)
     len=len+1
   end
-  if car(r) then 
+  if car(r) or end_token=='@end' then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -899,7 +902,7 @@ read_match_to_no_commas= function(token_clist,end_token)
     r=cdr(r)
     len=len+1
   end
-  if car(r).macro_token==end_token then 
+  if (nullp(r) and end_token=='@end') or car(r).macro_token==end_token then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -1343,6 +1346,8 @@ local function macro_match(datac,macro,filename)
     if car(pos).macro_token==car(c).macro_token then
       pos=cdr(pos)
       c=cdr(c)
+    elseif car(pos).macro_token=='@end' and nullp(c) then 
+      pos=cdr(pos)
     elseif macro_params[car(pos).macro_token] then
       local param_type = macro_params[car(pos).macro_token]
       local param_name=cadr(pos).macro_token -- @apply doesn't appear in the head
