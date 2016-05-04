@@ -5,7 +5,7 @@ started_debugging=true
 --require 'class'
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
-local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
+local optional_read_match_to,read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
 local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
 
 local token_metatable = {__tostring=
@@ -219,7 +219,7 @@ local function process_sections(filename)
     for k,v in pairs(filename2sections[filename]) do
         macro_list = Nil 
         for i=1,#v do
-          macro_list = list_append_in_place(v[i],macro_list)
+          if not nullp(v[i]) then macro_list = list_append_in_place(v[i],macro_list) end
           empty=false
         end
         for i=1,#v do table.remove(v) end
@@ -235,7 +235,9 @@ local function process_sections(filename)
   until empty
   for k,v in pairs(filename2sections[filename]) do
   --insert processed now
+    if not nullp(v.processed_macros) then
     v.insertion_point[3] = list_append_in_place(v.processed_macros,v.insertion_point[3])
+    end
   end
 end
 
@@ -271,7 +273,7 @@ local function pp_macro(lines,line_number,filename)
     my_err(cadr(start),'struct of macro expected after @macro, { expected')
   end
     local s,nl
-    s,nl=read_match_to(cddr(start),'}')
+    s,nl=optional_read_match_to(cddr(start),'}')
     if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after @macro, } expected')
  end
     local ret = sublist_to_list( {cdr(start),nl} )
@@ -491,7 +493,7 @@ local macro_params={
   ['?']='param match until',
   --in matches any number of elements including commas
   ['?,']='params',
-  --generate var
+  ['??,']='optional params',--generate var
   ['%']='generate var',
 --  ['%external-load:']='global load', -- also need a 4th entry for saving
   ['@apply']='apply macros',
@@ -518,7 +520,7 @@ local function skip_apply(l, store, filename)
   if (store) then 
     if car(l).macro_token ~='{' or cadr(l).macro_token ~='{' then my_err(car(l), 'array of macros expected after @apply ( got: '..car(l).macro_token .." ".. cadr(l).macro_token) end
     local s,nl
-    s,nl=read_match_to(l,',')
+    s,nl=optional_read_match_to(l,',')
     if not s then my_err(car(l), 'array of macros expected after @apply (') end
     if nullp(nl) then
       my_err(car(l) ', expected after @apply({macros...} ') 
@@ -563,6 +565,7 @@ local skip_param_tokens={
   ['param match until']=skip_one,
   --in matches any number of elements including commas
   ['params']=skip_one,
+  ['optional params']=skip_one,
   --generate var
   ['generate var']=skip_one,
 --  ['%external-load:']='global load', -- also need a 4th entry for saving
@@ -862,7 +865,38 @@ local function read_to(token_clist,end_token)
     r=cdr(r)
     len=len+1
   end
-  if car(r) or end_token=='@end' then 
+  if len~=0 and (car(r) or end_token=='@end') then 
+--    print('succeeded')
+    return true,r,len 
+  end
+--  print('failed')
+  return false,token_clist,0
+end
+
+optional_read_match_to = function(token_clist,end_token)
+-- print('read match to "', tostring(strip_tokens_from_list(token_clist)),'" to',end_token )  
+  local r=token_clist
+  local len=0
+  while not nullp(r) and car(r).macro_token~=end_token do
+    local m= match[car(r).macro_token]
+    if m then
+      local succ,inc
+--      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
+      succ,r,inc= optional_read_match_to(cdr(r),m)
+      if not succ then 
+--        print('failed inner match')
+        return false,token_clist,0 
+      end
+      len=len+inc+1
+      if m=='do' then
+        if nullp(r) then break end
+        succ,r,inc= optional_read_match_to(cdr(r),'end')
+      end
+    end
+    r=cdr(r)
+    len=len+1
+  end
+  if not nullp(r) or end_token=='@end' then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -879,7 +913,7 @@ read_match_to = function(token_clist,end_token)
     if m then
       local succ,inc
 --      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
-      succ,r,inc= read_match_to(cdr(r),m)
+      succ,r,inc= optional_read_match_to(cdr(r),m)
       if not succ then 
 --        print('failed inner match')
         return false,token_clist,0 
@@ -887,13 +921,13 @@ read_match_to = function(token_clist,end_token)
       len=len+inc+1
       if m=='do' then
         if nullp(r) then break end
-        succ,r,inc= read_match_to(cdr(r),'end')
+        succ,r,inc= optional_read_match_to(cdr(r),'end')
       end
     end
     r=cdr(r)
     len=len+1
   end
-  if car(r) or end_token=='@end' then 
+  if len~=0 and (not nullp(r) or end_token=='@end') then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -909,7 +943,7 @@ read_match_to_no_commas= function(token_clist,end_token)
     if match[car(r).macro_token] then
       local succ,inc
 --      print('found new match '..car(r).macro_token ..' to ' .. match[car(r).macro_token])
-      succ,r,inc= read_match_to(cdr(r),match[car(r).macro_token])
+      succ,r,inc= optional_read_match_to(cdr(r),match[car(r).macro_token])
       if not succ then 
 --        print('failed inner match')
         return false,token_clist,0 
@@ -919,7 +953,7 @@ read_match_to_no_commas= function(token_clist,end_token)
     r=cdr(r)
     len=len+1
   end
-  if (nullp(r) and end_token=='@end') or car(r).macro_token==end_token then 
+  if len~=0 and ((nullp(r) and end_token=='@end') or car(r).macro_token==end_token) then 
 --    print('succeeded')
     return true,r,len 
   end
@@ -1348,10 +1382,10 @@ local function macro_match(datac,macro,filename)
         --if nothing was matched, that's a failure
         --we could make a match type that accepts empty matchesS
         --{}{}{} maybe we should allow this or make it an option maybe ?? instead of ?
-        if #(param_info[cadr(pos).macro_token].value) == 0 then
+--        if #(param_info[cadr(pos).macro_token].value) == 0 then
 --          print("empty parameter")
-          return false
-        end
+--          return false
+--        end
 --        print(cadr(pos).macro_token,"set to",tostring(strip_tokens_from_list(param_info[cadr(pos).macro_token].value)))
       end
       c=nc
@@ -1390,6 +1424,10 @@ local function macro_match(datac,macro,filename)
         end
       elseif macro_params[car(pos).macro_token]=='params' then
         if not match(read_match_to) then 
+          return false,datac 
+        end
+      elseif macro_params[car(pos).macro_token]=='optional params' then
+        if not match(optional_read_match_to) then 
           return false,datac 
         end
       elseif macro_params[car(pos).macro_token]=='param match until' then
@@ -1461,7 +1499,9 @@ local function macro_match(datac,macro,filename)
 --            print('>>',param_info[car(bi).macro_token].value)
           elseif param_type=='param until' 
           or param_type=='param match until' 
-          or param_type=='params' then
+          or param_type=='params' 
+          or param_type=='optional params' 
+          then
             dest=append_list_to_array(dest,param_info[car(bi).macro_token].value)
 --            print('>>',param_info[car(bi).macro_token].value)
           elseif param_type=='generate var' then 
