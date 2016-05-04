@@ -38,14 +38,14 @@
     {head='while',body='WHILE'},
     {head='break',body='BREAK'},
     {head='continue',body='continue'},
-    {head='call ?cfun (?,values) ??,rest @end',
-    body ='?cfun(function() ?rest end,?values)' },
-    {head='call ?cfun () ??,rest @end',
-    body ='?cfun(function() ?rest end)' },
     {head='call ?,v = ?cfun (?,values) ??,rest @end',
     body ='?cfun(function(...) ?v=...; ?rest end,?values)' },
     {head='call ?,v = ?cfun () ??,rest @end',
     body ='?cfun(function(...) ?v=...; ?rest end)' },
+    {head='call ?cfun (?,values) ??,rest @end',
+    body ='?cfun(function() ?rest end,?values)' },
+    {head='call ?cfun () ??,rest @end',
+    body ='?cfun(function() ?rest end)' },
     {head ='store_and_ret_cc(?dest) ??,rest @end',
     body=[[
     local %temp = funcc() ?rest end 
@@ -70,14 +70,14 @@
     {head='while',body='WHILE'},
     {head='break',body='BREAK'},
     {head='continue',body='continue'},
-    {head='call ?cfun (?,values) ??,rest @end',
-    body ='?cfun(function() ?rest end,?values)' },
-    {head='call ?cfun () ??,rest @end',
-    body ='?cfun(function() ?rest end)' },
     {head='call ?,v = ?cfun (?,values) ??,rest @end',
     body ='?cfun(function(...) ?v=...; ?rest end,?values)' },
     {head='call ?,v = ?cfun () ??,rest @end',
     body ='?cfun(function(...) ?v=...; ?rest end)' },
+    {head='call ?cfun (?,values) ??,rest @end',
+    body ='?cfun(function() ?rest end,?values)' },
+    {head='call ?cfun () ??,rest @end',
+    body ='?cfun(function() ?rest end)' },
     {head ='store_and_ret_cc(?dest) ??,rest @end',
     body=[[
     local %temp = funcc() ?rest end 
@@ -113,6 +113,7 @@ count3 = funcc(store)
     n=3
     retc(n)
   end
+ 
   
   local cont={}
   local m
@@ -126,7 +127,20 @@ count3 = funcc(store)
     endcc
   endcc
 
+funcc_count3 = funcc(cont) 
+    local m
+    call m=count3(cont)
+    print(m)
+    call m=cont[1](cont)
+    print(m)
+    call m=cont[1](cont)
+    print(m)
+    retc()
+end    
   
+callcc funcc_count3(cont)
+endcc
+
   --oops, no continuation allowed in the test!
 @macro {  
   head='WHILE ?exp DO ??,statements END',
