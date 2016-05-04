@@ -1,12 +1,22 @@
 tokenizer=require 'simple_tokenizer'
 --comment out to have debugging autostart
---started_debugging=true
+started_debugging=true
 --local serpent = require("serpent")
 --require 'class'
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
 local read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
-local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
+local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
+
+local token_metatable = {__tostring=
+            function(self)
+              if self.token and self.macro_token~=self.token.value then
+                if self.type == 'String' then return self.token.value end
+                return self.token.value .. '-as-' .. self.macro_token 
+              end
+              return self.macro_token 
+              end
+            }
 
 local filename2sections = {}
 local function insure_subtable_exists(original_table,field)
@@ -50,11 +60,12 @@ end
 local function my_loadstring(string, filename,tokens)
   fill_codemap(filename,tokens,1)
   if not filename then filename = 'macro_temp.lua' end
---  local file=io.open(filename,"w")
---  file:write('return((')
---  file:write(string)
---  file:write(')())')
---  file:close()
+  local output_filename = filename .. '.temp.lua'
+  local file=io.open(output_filename,"w")
+  file:write('return((')
+  file:write(string ) --output_render(tokens))
+  file:write(')())')
+  file:close()
   local function my_hander(err)
     print('in handler '..tostring(err))
     local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
@@ -361,7 +372,7 @@ end
 add_token_keys(simple_translate)
 
 local function no_source_token(t)
-  return {macro_token=t}
+  return setmetatable({macro_token=t},token_metatable)
 end
 
 
@@ -392,7 +403,7 @@ local function string_to_source_array(str,filename,err_handler)
         first=false
       end
       prevx=token.to_x
-      table.insert(flatten, {first = first,macro_token=simple_translate[value],type=ttype,token=token,dx=dx,dy=dy,indent=indent, splice=false, indent_delta=0}) 
+      table.insert(flatten, setmetatable( {first = first,macro_token=simple_translate[value],type=ttype,token=token,dx=dx,dy=dy,indent=indent, splice=false, indent_delta=0},token_metatable)) 
 --      print('y = '..tostring( flatten[#flatten].token.from_line )..'\t x = '.. tostring( flatten[#flatten].token.from_x))
     end 
     return flatten
@@ -778,15 +789,12 @@ concat_cons= function(l,v)
   return table.concat(dest,v)
 end
 
-render= function (l)
+output_render= function (l)
   local d={}
   while not nullp(l) do
     table.insert(d, car(l).macro_token)
     l=cdr(l)  
   end
-  return table.concat(d,'\n')
-end
---[=[  
   local d={}
  -- local render_line,render_x = 0,0
   local next_line = true
@@ -806,7 +814,7 @@ end
     table.insert(d, string.rep(' ',p))
     table.insert(d, t.macro_token)
     local k=t.token
- ---[[   
+ --[[   
     while k and k.source[k.source_index+1] and not k.source[k.source_index+1].meaningful do
       local n = k.source[k.source_index+1]
       if n.type == "Comment" then 
@@ -830,6 +838,15 @@ end
   return table.concat(d,'')
 end
 --]=]
+
+render= function (l)
+  local d={}
+  while not nullp(l) do
+    table.insert(d, car(l).macro_token)
+    l=cdr(l)  
+  end
+  return table.concat(d,'\n')
+end
 
 Nil = cons()
 Nil[2]=Nil
@@ -1059,7 +1076,7 @@ local function apply_inner_macros(macros_dest,params,params_info,filename)
         if macro_params[car(l).macro_token] == 'generate var' then
           if not params_info[cadr(l).macro_token].value then
               gen_var_counter=gen_var_counter+1
-              params_info[cadr(l).macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
+              params_info[cadr(l).macro_token].value = setmetatable({ macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'},token_metatable)
           end          
           
           local k=simple_copy(car(l))
@@ -1200,13 +1217,13 @@ add_macro= function (params, macros_dest,filename,line)
   
   local dest = {}
   if not params.head then error  'macros have to have a head' end
-  dest.head=array_to_list(string_to_source_array(params.head,filename))
+  dest.head=array_to_list(string_to_source_array(params.head,filename,my_err))
       if line then set_token_list_line(dest.head,line) end  
   if params.body then
     if type(params.body) == 'function'  then
       dest.body = params.body
     else
-      dest.body=array_to_list(string_to_source_array(params.body or {},filename))
+      dest.body=array_to_list(string_to_source_array(params.body or {},filename,my_err))
       if line then set_token_list_line(dest.body,line) end
     end
   end
@@ -1450,7 +1467,7 @@ local function macro_match(datac,macro,filename)
           elseif param_type=='generate var' then 
             if not param_info[car(bi).macro_token].value then
               gen_var_counter=gen_var_counter+1
-              param_info[car(bi).macro_token].value = { macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'}
+              param_info[car(bi).macro_token].value = setmetatable({ macro_token= '__GENVAR_'.. tostring(gen_var_counter) ..'__', type='Id'},token_metatable)
 --              print('generating variable',car(bi).macro_token, 'as',param_info[car(bi).macro_token].value )
             end
       --      dest=cons(param_info[body[bi].macro_token].value,dest)
@@ -1547,7 +1564,7 @@ apply_macros = function(macros, flatten,filename)
 end
 
 local function token_error_handler(token)
-  my_err({macro_token=simple_translate[token.value], type = token.type, token=token},'illegal token')
+  my_err(setmetatable({macro_token=simple_translate[token.value], type = token.type, token=token},token_metatable),'illegal token')
 end
 
 --process as used by process sections just processes a list and returns a list
