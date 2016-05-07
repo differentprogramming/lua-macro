@@ -57,13 +57,14 @@ local function fill_codemap(filename, tokens,m)
   
 end
 
-local function my_loadstring(string, filename,tokens)
+local function my_loadstring(string, filename,tokens,output_string)
+  output_string=output_string or string
   fill_codemap(filename,tokens,1)
   if not filename then filename = 'macro_temp.lua' end
   local output_filename = filename .. '.temp.lua'
   local file=io.open(output_filename,"w")
   file:write('return((')
-  file:write(string ) --output_render(tokens))
+  file:write(output_string ) --output_render(tokens))
   file:write(')())')
   file:close()
   local function my_hander(err)
@@ -817,7 +818,7 @@ output_render= function (l)
     table.insert(d, string.rep(' ',p))
     table.insert(d, t.macro_token)
     local k=t.token
- --[[   
+ ---[[   
     while k and k.source[k.source_index+1] and not k.source[k.source_index+1].meaningful do
       local n = k.source[k.source_index+1]
       if n.type == "Comment" then 
@@ -1320,15 +1321,31 @@ add_macro({ head='?1a @@ ?1b',
 
 local tostring_body = array_to_list(string_to_source_array('"dummy" ?a'))
 
-add_macro({ head='@tostring(?1a)', 
+add_macro({ head='@tostring(?,a)',
     body= function(param_info,c,do_body)
       local ok,s,ret,n = do_body(tostring_body,c)
+      local dest = {'[======['}
+      
       if ok then
         ret[2]=token_copy(ret[2])
-        car(ret).macro_token = '[======['..cadr(ret).macro_token..']======]'
+        
+        local l = param_info['a'].value
+        local e = ret[3]
+        local first=true
+        while not nullp(l) do
+          e=e[3]
+          if not first then table.insert(dest,' ') end
+          first = false
+          table.insert(dest,car(l).macro_token)
+          l=cdr(l)
+        end
+        table.insert(dest,']======]')
+        
+        
+        car(ret).macro_token = table.concat(dest,'')
         car(ret).token.processed = cadr(ret).macro_token
         car(ret).token.value = car(ret).macro_token
-        ret[3]=ret[3][3]
+        ret[3]=e
       end
       return ok,s,ret,n
      end })
@@ -1664,7 +1681,7 @@ process =  function(str,filename, no_render)
   process_sections(filename)
   local ret=render(dest,'\n') 
 --  print(strip_tokens_from_list( dest))
-  return ret,dest
+  return ret,dest,output_render(dest)
 end
 
 local macro_path = string.gsub(package.path,'%.lua','.pp.lua')
@@ -1678,8 +1695,8 @@ local function load(modulename)
     local file = io.open(filename, "rb")
     if file then
       -- Compile and return the module      print('here!')
-      local string, tokens = process(assert(file:read("*a")),filename)
-      return assert(my_loadstring(string, filename,tokens))
+      local string, tokens,output_string = process(assert(file:read("*a")),filename)
+      return assert(my_loadstring(string, filename,tokens,output_string))
     end
     errmsg = errmsg.."\n\tno file '"..filename.."' (checked with custom loader)"
   end
@@ -1698,8 +1715,8 @@ local function scriptload(modulename)
     local file = io.open(filename, "rb")
     if file then
       -- Compile and return the module      print('here!')
-      local string, tokens = process(assert(file:read("*a")),filename)
-      return assert(my_loadstring(string, filename,tokens))
+      local string, tokens,output_string = process(assert(file:read("*a")),filename)
+      return assert(my_loadstring(string, filename,tokens,output_string))
     end
     errmsg = errmsg.."\n\tno file '"..filename.."' (checked with custom loader)"
   end
@@ -1707,9 +1724,11 @@ local function scriptload(modulename)
 end
 
 
-return {
+macro_system = {
   add = add_macro,
   add_simple=add_simple_translate,
   load=load,
   scriptload=scriptload,
-  }
+}
+
+return macro_system
