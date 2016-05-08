@@ -69,9 +69,9 @@ local function my_loadstring(string, filename,tokens,output_string)
   if not filename then filename = 'macro_temp.lua' end
   local output_filename = filename .. '.temp.lua'
   local file=io.open(output_filename,"w")
-  file:write('return((')
-  file:write(string ) --output_render(tokens))
-  file:write(')())')
+--  file:write('return((')
+  file:write(output_string ) --output_render(tokens))
+--  file:write(')())')
   file:close()
   local function my_hander(err)
     print('in handler '..tostring(err))
@@ -803,11 +803,11 @@ concat_cons= function(l,v)
 end
 
 output_render= function (l)
-  local d={}
-  while not nullp(l) do
-    table.insert(d, car(l).macro_token)
-    l=cdr(l)  
-  end
+  --local d={}
+  --while not nullp(l) do
+  --  table.insert(d, car(l).macro_token)
+  --  l=cdr(l)  
+ -- end
   local d={}
  -- local render_line,render_x = 0,0
   local next_line = true
@@ -840,7 +840,7 @@ output_render= function (l)
           table.insert(d,string.rep(' ',p))
       end
         table.insert(d,n.value)
-        table.insert(d,'\n')
+--        table.insert(d,'\n')
       end
       k=n
     end
