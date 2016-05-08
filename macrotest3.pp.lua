@@ -9,6 +9,12 @@ endamb                                          --line3
 --before section
 @section 'define' --after section
   
+ print 'in regular phase' 
+@start
+   print 'in pre load phase'
+   print (@tostring( no/need ), blah.h)
+@end 
+  
 print('returned '..(function()   
   local i,j --[[a different comment]] --line 4
   i=1 --line5
@@ -56,7 +62,7 @@ end
   
 display(macro1(1),5)  
   
-@macro {new_tokens={'amb','endamb','inner_amb'},
+@macro {new_tokens={'amb','endamb','inner_amb','no/need'},
   head=[[local amb ?id = ( ?first , ?,rest ) ?,statements endamb]],
   body= [[for _,%i in ipairs{ [|| @ ?first |], inner_amb ?rest } do
     local ?id=%i();
