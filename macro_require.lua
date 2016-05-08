@@ -303,6 +303,51 @@ local function pp_macro(lines,line_number,filename,skipping)
   return car(nl).token.from_line+1
 end
 
+local function pp_start(lines,line_number,filename,skipping) 
+  local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
+  local splice_first = start[1] -- can be 'Cons' on the first element
+    local s,nl
+    s,nl=optional_read_match_to(cddr(start),'@end')
+    if not s or nullp(nl) or car(nl).macro_token ~='@end' then 
+      my_err(start,'@end expected after @start')
+    end
+    local ret = sublist_to_list( {cdr(start),nl},1 )
+--    local filename = nil
+   if not filename and car(start).token then filename = car(start).token.filename end
+   if not skipping then 
+    if ret then
+      ret=process(ret,filename,'no render')
+    end
+    local macro = my_dostring('return function ()'.. render(ret)..'end', filename, cdr(start));
+    if not macro then my_err(car(start), 'syntax error @start/@end block') end
+
+  local function my_handler(err)
+    local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
+    if not token_number then 
+      my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+    else
+      token_number = tonumber(token_number)+2
+      
+      if not nullp(cdr(start)) then
+          my_err(nthcar( token_number,cdr(start)), error_text)
+      else 
+        my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+      end
+    end
+  end  
+  xpcall(macro,my_handler)
+   end
+  if splice_first~= 'Cons' then 
+    splice_first[3]=cdr(nl)
+    cdr(nl)[1]=splice_first
+  else
+    start[3]=cdr(nl)
+    cdr(nl)[1]=start
+    car(start).macro_token=''
+  end
+  return car(nl).token.from_line+1
+end
+
 --turn list back to normal cons cells after first stage of preprocessing
 local function strip_back_links(list)
   local n=list
@@ -316,8 +361,8 @@ end
 
 
 preprocessor_tokens =  setmetatable({
-['@start']=pp_null_fn,
-['@end']=pp_null_fn,
+['@start']=pp_start,
+-- ['@end']=pp_null_fn,
 ['@define']=pp_null_fn,
 ['@if']=pp_null_fn,
 ['@elseif']=pp_null_fn,
