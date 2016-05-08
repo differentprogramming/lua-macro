@@ -1,6 +1,12 @@
 tokenizer=require 'simple_tokenizer'
 --comment out to have debugging autostart
 started_debugging=true
+  if not started_debugging then
+    started_debugging = true
+    
+  
+    require('mobdebug').start()
+  end
 --local serpent = require("serpent")
 --require 'class'
 --forward references
@@ -64,7 +70,7 @@ local function my_loadstring(string, filename,tokens,output_string)
   local output_filename = filename .. '.temp.lua'
   local file=io.open(output_filename,"w")
   file:write('return((')
-  file:write(output_string ) --output_render(tokens))
+  file:write(string ) --output_render(tokens))
   file:write(')())')
   file:close()
   local function my_hander(err)
@@ -188,7 +194,7 @@ my_err= function (mtoken,err)
   os.exit(1)
 end
 
-local function pp_section(lines,line_number,filename)
+local function pp_section(lines,line_number,filename, skipping)
   local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
   if not filename and car(start).token then filename = car(start).token.filename end
   
@@ -201,12 +207,14 @@ local function pp_section(lines,line_number,filename)
   car(start).macro_token='' 
   cadr(start).macro_token=''
   
-  insure_subtable_exists(filename2sections,filename)
-  if filename2sections[filename][cadr(start).token.processed] then
-    my_err(cadr(start),'section '..cadr(start).token.processed..' in file '..filename..' already exists.')
+  if skipping then 
+    insure_subtable_exists(filename2sections,filename)
+    if filename2sections[filename][cadr(start).token.processed] then
+      my_err(cadr(start),'section '..cadr(start).token.processed..' in file '..filename..' already exists.')
+    end
+    
+    filename2sections[filename][cadr(start).token.processed]= {insertion_point = start}
   end
-  
-  filename2sections[filename][cadr(start).token.processed]= {insertion_point = start}
 --  car(start).section = { filename=filename, section_name=cadr(start).token.processed }
   --table.insert(filename2sections[filename],cadr(start).token.processed)
   return car(nl).token.from_line+1
@@ -248,14 +256,14 @@ local function section_object_from_token(token)
 end
 
 
-local function pp_require(lines,line_number,filename)
+local function pp_require(lines,line_number,filename,skipping)
   local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
   local splice_first = start[1] -- can be 'Cons' on the first element
   if cadr(start).type ~= 'String' then
     my_err(cadr(start),'name of a file expected after @require, " or \' expected')
   end--{}{}{}
   local nl = cdr(start)
-  require(cadr(start).token.processed)
+  if not skipping then require(cadr(start).token.processed) end
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
     cdr(nl)[1]=splice_first
@@ -267,7 +275,7 @@ local function pp_require(lines,line_number,filename)
   return car(nl).token.from_line+1
 end
 
-local function pp_macro(lines,line_number,filename) 
+local function pp_macro(lines,line_number,filename,skipping) 
   local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
   local splice_first = start[1] -- can be 'Cons' on the first element
   if cadr(start).macro_token ~= '{' then
@@ -275,14 +283,15 @@ local function pp_macro(lines,line_number,filename)
   end
     local s,nl
     s,nl=optional_read_match_to(cddr(start),'}')
-    if not s or nullp(nl) or car(nl).macro_token ~='}' then my_err(start,'struct of macro expected after @macro, } expected')
- end
+    if not s or nullp(nl) or car(nl).macro_token ~='}' then 
+      my_err(start,'struct of macro expected after @macro, } expected')
+    end
     local ret = sublist_to_list( {cdr(start),nl} )
 --    local filename = nil
-    if not filename and car(start).token then filename = car(start).token.filename end
+   if not filename and car(start).token then filename = car(start).token.filename end
    local macro = my_dostring('return('..render(ret)..')', filename, cdr(start));
    if not macro then my_err(car(start), 'syntax error in table definition for macro') end
-   add_macro(macro,macros, filename,car(start).token.from_line)
+   if not skipping then add_macro(macro,macros, filename,car(start).token.from_line) end
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
     cdr(nl)[1]=splice_first
@@ -1249,6 +1258,7 @@ sections = {section_name (can be functions)...}}
 macros_dest is optional
 ]]
 add_macro= function (params, macros_dest,filename,line)
+  add_tokens(params.new_tokens)
   
   local dest = {}
   if not params.head then error  'macros have to have a head' end
@@ -1268,7 +1278,7 @@ add_macro= function (params, macros_dest,filename,line)
   dest.semantic_function = params.semantic_function
   dest.new_tokens = params.new_tokens
   dest.sections = params.section
-    
+      
   validate_params(dest.head,true,filename)
   dest.handle, dest.handle_offset = scan_head_forward(dest.head)
 --  print('handle == '..dest.handle,'handle offset == '..dest.handle_offset)
@@ -1288,7 +1298,6 @@ add_macro= function (params, macros_dest,filename,line)
       validate_params(dest.sections[k],false,filename)
     end
   end  
-  add_tokens(dest.new_tokens)
   
   macros_dest = macros_dest or macros
   while not macros_dest[dest.handle_offset] do 
@@ -1628,7 +1637,7 @@ end
 --no preprocessing, no rendering to a string
 --this is signaled by no_render not being nil
 
-process =  function(str,filename, no_render)
+process =  function(str,filename, no_render,skipping)
   local source_array 
   local source_list
   if no_render then
@@ -1665,11 +1674,13 @@ process =  function(str,filename, no_render)
   --      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
   --    end
       if lines[i+1] ~= 0 then
-        i = preprocessor_tokens[car(lines[i+1]).macro_token](lines,i,filename) -- returns the next line to process
+        i = preprocessor_tokens[car(lines[i+1]).macro_token](lines,i,filename, skipping) -- returns the next line to process
       else
         i=i+1
       end
     end
+    --kludge so that special tokens will be added
+    if not skipping then return process(str,filename, no_render,true) end
   end
 --  print('after preprocess statements are removed, file is [' .. strip_tokens_from_list(source_list) .. ']')
   
