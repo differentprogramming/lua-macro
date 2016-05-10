@@ -112,6 +112,7 @@ end
 
 local function my_dostring(string, filename, tokens)
 
+--print('my_dostring 「', string,'」')
   if not filename then filename = 'macro_temp.lua' end
   fill_codemap(filename,tokens,-1)
 --  local file=io.open(filename,"w")
@@ -193,6 +194,223 @@ my_err= function (mtoken,err)
   io.stderr:write(file_path(mtoken).. line .. err .. '\n')
   os.exit(1)
 end
+
+--from is cut, to is cut
+local function cut_out_lines(lines,from_line,to_line)
+--  print ("delete lines from "..from_line.." to "..to_line)
+  while lines[1+from_line]==0 do from_line=from_line+1 end
+  while lines[2+to_line]==0  do to_line=to_line+1 end
+  
+  if to_line<from_line or not lines[1+from_line] then return end
+  
+  --print ("adjusted delete lines from "..from_line.." to "..to_line)
+  
+  local at_start=lines[from_line+1]
+  local before_start=at_start[1]
+  local after_end=lines[to_line+2]
+  local at_end
+  
+  
+  if after_end then
+    at_end=after_end[1]
+  else
+    after_end=Nil
+  end
+  
+  if before_start ~= 'Cons' then 
+    before_start[3]=after_end
+    if after_end~= Nil then after_end[1]=before_start end
+  else
+    at_start[3]=after_end
+    if after_end~= Nil then after_end[1]=at_start end
+    at_start[2].macro_token=''
+  end
+  for j=from_line+1,to_line+1 do lines[j]=0 end
+end
+
+local function cut_out_lines_saved(lines,saved)
+  cut_out_lines(lines,saved[1],saved[2])
+  return saved;
+end
+
+local cut_out_if_lines = {}
+
+local if_state = {}
+
+local function redo_if_statements(lines)
+  while #cut_out_if_lines>0 do cut_out_lines_saved(lines,table.remove(cut_out_if_lines)) end
+end  
+
+local if_special_lines = {
+  ['@endif']=true,
+  ['@else']=true,
+  ['@elseif']=true,
+  ['@if']=true
+  }
+
+local if_skip_lines = {
+  ['@endif']=true,
+  ['@if']=true
+  }
+
+local function skip_if(lines, curline, line_number)
+    ::search_more::
+    repeat 
+      curline=curline+1
+    until not lines[1+curline] or if_skip_lines[car(lines[1+curline]).macro_token]
+    if not lines[1+curline] then 
+      my_err(cadr(start),'unfinished @if, from line ' .. tostring(line_number))
+    end
+    if token == '@if' then
+      curline=skip_if(lines, curline, line_number)
+      goto search_more
+    end -- token == '@endif' 
+    return curline
+end
+
+local function pp_endif(lines,line_number,filename, skipping)
+  if skipping then 
+    my_err(cadr(start),'internal error.  @endifs should be culled before second pass')
+  end
+  if #if_state==0 then 
+    my_err(cadr(start),'@endif without matching @if')
+  end
+  table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,line_number}))
+  table.remove(if_state)
+  return line_number+1
+end
+
+local function pp_else(lines,line_number,filename, skipping)
+  local start = lines[line_number+1]
+  if #if_state==0 then 
+    my_err(cadr(start),'@else without matching @if')
+  end
+  table.remove(if_state)
+    local curline=line_number
+    ::search_more::
+    repeat 
+      curline=curline+1
+    until not lines[1+curline] or (lines[1+curline]~=0 and if_special_lines[car(lines[1+curline]).macro_token])
+    if not lines[1+curline] then 
+      my_err(cadr(start),'unfinished @if, from line ' .. tostring(line_number))
+    end
+    local token = car(lines[1+curline]).macro_token
+    if token == '@if' then
+      curline=skip_if(lines, curline, line_number)
+      goto search_more
+    elseif token == '@endif' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline}))
+      return curline+1
+    elseif token == '@else' then
+      my_err(cadr(start),'second @else ' )
+    elseif token == '@elseif' then
+      my_err(cadr(start),'@elseif after @else ' )
+    end    
+end
+
+local function pp_elseif(lines,line_number,filename, skipping)
+  local start = lines[line_number+1]
+  if #if_state==0 then 
+    my_err(cadr(start),'@elseif without matching @if')
+  end
+    local curline=line_number
+    ::search_more::
+    repeat 
+      curline=curline+1
+    until not lines[1+curline] or (lines[1+curline]~=0 and if_special_lines[car(lines[1+curline]).macro_token])
+    if not lines[1+curline] then 
+      my_err(cadr(start),'unfinished @if, from line ' .. tostring(line_number))
+    end
+    local token = car(lines[1+curline]).macro_token
+    if token == '@if' then
+      curline=skip_if(lines, curline, line_number)
+      goto search_more
+    elseif token == '@endif' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline}))
+      return curline+1
+    elseif token == '@else' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline-1}))
+      return pp_else(lines,curline,filename, skipping)
+    elseif token == '@elseif' then
+      goto search_more
+    end    
+  table.remove(if_state)
+end  
+
+local function pp_if(lines,line_number,filename, skipping)
+  local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
+  if skipping then 
+    my_err(cadr(start),'internal error.  @ifs should be culled before second pass')
+  end
+  
+  local function my_handler(err)
+    local token_number,error_text=string.match(tostring(err),":(%d+):(.*)")
+    if not token_number then 
+      my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+    else
+      token_number = tonumber(token_number)+2
+      
+      if not nullp(cdr(start)) then
+          my_err(nthcar( token_number,cdr(start)), error_text)
+      else 
+        my_err(nil,"can't determine token for error \""..tostring(err)..'"')
+      end
+    end
+  end
+  
+  local function do_conditional_expression(line_number)
+    local start = lines[line_number+1]
+    local exp_start=cdr(lines[line_number+1])
+    local exp_end=exp_start
+    while not nullp(cadr(exp_end)) and cadr(exp_end).token.from_line == line_number do exp_end=cdr(exp_end) end
+    local ret= sublist_to_list({exp_start,exp_end},0)
+    if not filename and car(start).token then filename = car(start).token.filename end
+    if not skipping then
+      if ret then
+        ret=process(ret,filename,'no render')
+      end
+      local cond = my_dostring('return ('.. render(ret).. ')', filename, cdr(start));
+--      if not cond then my_err(car(start), 'syntax error in @if or @elseif conditional expression') end
+    
+--      local _success,_err,result= xpcall(cond,my_handler)
+--      print('if result',_success,_err,result)
+      return cond
+    end
+  end
+  if do_conditional_expression(line_number) then
+--  print('if succeeded')
+    table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,line_number}))
+    table.insert(if_state, 'if')
+    return line_number+1
+  
+  else
+--  print('if failed')
+    local curline=line_number
+    ::search_more::
+    repeat 
+      curline=curline+1
+    until not lines[1+curline] or (lines[1+curline]~=0 and if_special_lines[car(lines[1+curline]).macro_token])
+    if not lines[1+curline] then 
+      my_err(cadr(start),'unfinished @if, from line ' .. tostring(line_number))
+    end
+    local token = car(lines[1+curline]).macro_token
+    if token == '@if' then
+      curline=skip_if(lines, curline, line_number)
+      goto search_more
+    elseif token == '@endif' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline}))
+      return curline+1
+    elseif token == '@else' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline}))
+      table.insert(if_state, 'else')
+      return curline+1
+    elseif token == '@elseif' then
+      table.insert(cut_out_if_lines,cut_out_lines_saved(lines,{line_number,curline-1}))
+      return pp_if(lines,curline, filename, skipping)
+    end    
+  end
+end
+
 
 local function pp_section(lines,line_number,filename, skipping)
   local start = lines[line_number+1] --lines are counted from 0 but lua arrays from 1
@@ -318,7 +536,7 @@ local function pp_start(lines,line_number,filename,skipping)
     if ret then
       ret=process(ret,filename,'no render')
     end
-    local macro = my_dostring('return function ()'.. render(ret)..'end', filename, cdr(start));
+    local macro = my_dostring('return function () '.. render(ret)..' end', filename, cdr(start));
     if not macro then my_err(car(start), 'syntax error @start/@end block') end
 
   local function my_handler(err)
@@ -363,13 +581,13 @@ end
 preprocessor_tokens =  setmetatable({
 ['@start']=pp_start,
 -- ['@end']=pp_null_fn,
-['@define']=pp_null_fn,
-['@if']=pp_null_fn,
-['@elseif']=pp_null_fn,
-['@else']=pp_null_fn,
-['@endif']=pp_null_fn,
+--['@define']=pp_null_fn,
+['@if']=pp_if,
+['@elseif']=pp_elseif,
+['@else']=pp_else,
+['@endif']=pp_endif,
 ['@section']=pp_section,
-['@fileout']=pp_null_fn,
+--['@fileout']=pp_null_fn,
 ['@require']=pp_require,
 ['@macro']=pp_macro,
 }, { __index = function (_,v) return pp_null_fn end})
@@ -1349,6 +1567,7 @@ add_macro= function (params, macros_dest,filename,line)
     table.insert(macros_dest,{}) 
   end
   if not macros_dest[dest.handle_offset][dest.handle] then macros_dest[dest.handle_offset][dest.handle]={} end 
+  --print('macro on handle '..dest.handle..' defined')
   table.insert(macros_dest[dest.handle_offset][dest.handle],dest)
 
 end
@@ -1710,6 +1929,8 @@ process =  function(str,filename, no_render,skipping)
       p=cdr(p)
     end
     
+    if skipping then redo_if_statements(lines) end
+    
     local i=0 --line numbers and x positions count from 0 
     while i < #lines do                                         -- handle preprocessor directives that only appear as the first token of lines
   --    if lines[i] == 0 then 
@@ -1725,7 +1946,10 @@ process =  function(str,filename, no_render,skipping)
       end
     end
     --kludge so that special tokens will be added
-    if not skipping then return process(str,filename, no_render,true) end
+    if not skipping then
+   --   print 'phase 2'
+      return process(str,filename, no_render,true) 
+    end
   end
 --  print('after preprocess statements are removed, file is [' .. strip_tokens_from_list(source_list) .. ']')
   
