@@ -12,7 +12,7 @@ started_debugging=true
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
 local optional_read_match_to,read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
-local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process,list_to_stripped_array
+local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process,list_to_stripped_array,add_tokens
 
 local token_metatable = {__tostring=
             function(self)
@@ -509,7 +509,11 @@ local function pp_macro(lines,line_number,filename,skipping)
    if not filename and car(start).token then filename = car(start).token.filename end
    local macro = my_dostring('return('..render(ret)..')', filename, cdr(start));
    if not macro then my_err(car(start), 'syntax error in table definition for macro') end
-   if not skipping then add_macro(macro,macros, filename,car(start).token.from_line) end
+   if not skipping then 
+     print("adding macro:",macro.head)
+    print(macro.new_tokens)
+    add_macro(macro,macros, filename,car(start).token.from_line) 
+    end
   if splice_first~= 'Cons' then 
     splice_first[3]=cdr(nl)
     cdr(nl)[1]=splice_first
@@ -637,7 +641,7 @@ add_token_keys= function(t)
     tokenizer.add_special_token(k)
   end
 end
-local function add_tokens(t)
+add_tokens= function(t)
   if not t then return end
   for _,v in ipairs(t) do
     tokenizer.add_special_token(v)
@@ -653,7 +657,9 @@ end
 
 local function string_to_source_array(str,filename,err_handler)
   local error_pos, source, meaningful =tokenizer.tokenize_all(str,filename,err_handler)
-  if not error_pos then
+  --{}{}{} process needs to ignore token errors on the first pass 
+  -- but the rest of the program???
+--  if not error_pos then
     local flatten={}
     local prevx,prevy,indent=0,0,0
     for a = 1,#meaningful do 
@@ -682,7 +688,7 @@ local function string_to_source_array(str,filename,err_handler)
 --      print('y = '..tostring( flatten[#flatten].token.from_line )..'\t x = '.. tostring( flatten[#flatten].token.from_x))
     end 
     return flatten
-  end
+--  end
 end
 
 local function splice_simple(original_head_list, new_head_array, concat_list)
@@ -1261,6 +1267,10 @@ end
 
 local gen_var_counter = 10000
 
+local function gensym() 
+  gen_var_counter=gen_var_counter+1
+  return '__GENVAR_'.. tostring(gen_var_counter) .. '__'
+end
 --sublists are dangerious {pos-in-list, later-pos-in-same-list}
 --as long as that invariant holds, we're ok
 --not inclusive of second element
@@ -1719,7 +1729,7 @@ local function macro_match(datac,macro,filename)
           table.insert(tagged_sanitized,{tag=param_type,name=param_name,car(c).macro_token}) 
         end
         if param_info[param_name].value then -- prolog style equality matching
-          if param_info[param_name].value~=car(c).macro_token then 
+          if param_info[param_name].value.macro_token~=car(c).macro_token then 
             return false,datac 
           else 
 --            print(cadr(pos).macro_token, "= a previous match", car(c).macro_token)
@@ -1869,7 +1879,11 @@ local function macro_match(datac,macro,filename)
   if functional_macros then
     sanitized_param_info = { }
     for k,v in pairs(param_info) do
-      sanitized_param_info[k]={type=v.type, value = list_to_stripped_array(v.value)}
+      if v.type == 'param' then 
+        sanitized_param_info[k]={type=v.type, value = {v.value.macro_token} }
+      else
+        sanitized_param_info[k]={type=v.type, value = list_to_stripped_array(v.value)}
+      end
     end
   end
   
@@ -1959,7 +1973,12 @@ process =  function(str,filename, no_render,skipping)
   if no_render then
     source_list = str
   else
-    source_array = string_to_source_array(str,filename,token_error_handler)   -- stores simple translated names in macro_token, and the whole token in token
+    if skipping then 
+      source_array = string_to_source_array(str,filename,token_error_handler)   -- stores simple translated names in macro_token, and the whole token in token
+    else
+      source_array = string_to_source_array(str,filename)   -- stores simple translated 
+    end
+    
     source_list=array_to_list(source_array)               -- convert to sexpr so that it's more   end
   end                                                            
   local lines = {}                                            -- make array of lines in order to handle preprocessor directives that only appear at the beginning of lines
@@ -1992,6 +2011,10 @@ process =  function(str,filename, no_render,skipping)
   --      if lines[i][1]=='Cons' then print ('is first token') else print('prev token at line '..car(lines[i][1]).token.from_line .. ' is a '.. car(lines[i][1]).macro_token) end
   --    end
       if lines[i+1] ~= 0 then
+--        local fn = preprocessor_tokens[car(lines[i+1]).macro_token]
+--        if fn~= pp_null_fn then 
+--          print ('preprocess', car(lines[i+1]).macro_token)  
+--        end
         i = preprocessor_tokens[car(lines[i+1]).macro_token](lines,i,filename, skipping) -- returns the next line to process
       else
         i=i+1
@@ -1999,7 +2022,7 @@ process =  function(str,filename, no_render,skipping)
     end
     --kludge so that special tokens will be added
     if not skipping then
-   --   print 'phase 2'
+      print 'phase 2'
       return process(str,filename, no_render,true) 
     end
   end
@@ -2057,6 +2080,7 @@ end
 
 
 macro_system = {
+  gensym=gensym,
   add = add_macro,
   add_simple=add_simple_translate,
   load=load,
