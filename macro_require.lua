@@ -12,7 +12,7 @@ started_debugging=true
 --forward references
 local strip_tokens_from_list,apply_macros,add_macro,nullp,cdr,car,cadr,cddr,caddr,cdddr,macros,validate_params
 local optional_read_match_to,read_match_to,read_match_to_no_commas,sublist_to_list,concat_cons,scan_head_forward,add_token_keys,nthcar
-local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process
+local my_err,cons,list_to_array,copy_list, copy_list_and_object,simple_copy,render,output_render, last_cell,reverse_list_in_place,reverse_list,cons_tostring,Nil,list_append_in_place,process,list_to_stripped_array
 
 local token_metatable = {__tostring=
             function(self)
@@ -1305,13 +1305,17 @@ sublist_to_list= function (s,endoff)
   return array_to_list(sublist_to_array(s,endoff))
 end
 
-strip_tokens_from_list= function(l)
+list_to_stripped_array = function(l)
   local d={}
   while not nullp(l) do
     table.insert(d,car(l).macro_token)
     l=cdr(l)
   end
-  return array_to_list(d)
+  return d
+end
+
+strip_tokens_from_list= function(l)
+  return array_to_list(list_to_stripped_array(d))
 end
 
 local function stripped_sublist_equal(a,b)
@@ -1410,6 +1414,9 @@ local function apply_inner_macros(macros_dest,params,params_info,filename)
   local dest = {}
   if not params.head then 
     error  'inner macros have to have a head' 
+  end
+  if not params.body then 
+    error  'inner macros have to have a body' 
   end
   dest.head=replace_params(params.head)--replace_params(array_to_list(string_to_token_array(params.head)))
   if params.body then
@@ -1527,6 +1534,7 @@ add_macro= function (params, macros_dest,filename,line)
   if not params.head then error  'macros have to have a head' end
   dest.head=array_to_list(string_to_source_array(params.head,filename,my_err))
       if line then set_token_list_line(dest.head,line) end  
+  dest.internal_function_body=params.internal_function_body    
   if params.body then
     if type(params.body) == 'function'  then
       dest.body = params.body
@@ -1549,7 +1557,7 @@ add_macro= function (params, macros_dest,filename,line)
 --can match, it just means the rescan has to go that far.
 --  scan_head_backward(dest.head)
 
-  if type(dest.body) ~= 'function' then
+  if dest.body and type(dest.body) ~= 'function' then
     validate_params(dest.body,false,filename)
   end
   
@@ -1581,7 +1589,7 @@ end
 
 local splice_body = array_to_list(string_to_source_array('?a ?b'))
 add_macro({ head='?1a @@ ?1b', 
-    body= function(param_info,c,do_body)
+    internal_function_body= function(param_info,c,do_body)
       local ok,s,ret,n = do_body(splice_body,c)
       if ok then
         ret[2]=token_copy(ret[2])
@@ -1590,12 +1598,14 @@ add_macro({ head='?1a @@ ?1b',
         car(ret).type = 'Id'
       end
       return ok,s,ret,n
-     end })
+     end,
+     
+     })
 
 local tostring_body = array_to_list(string_to_source_array('"dummy" ?a'))
 
 add_macro({ head='@tostring(?,a)',
-    body= function(param_info,c,do_body)
+    internal_function_body= function(param_info,c,do_body)
       local ok,s,ret,n = do_body(tostring_body,c)
       local dest = {'[======['}
       
@@ -1632,7 +1642,7 @@ end
 for i,v in ipairs(macros) do
   add_tokens(v.new_tokens)
   v.head=string_to_source_array(v.head)
-  v.body=string_to_source_array(v.body)
+  if v.body then v.body=string_to_source_array(v.body) end
 end
 
 --        processed,replaced_tokens_list,last_replaced_token_list_element =macro_match(flatten,pos,v)
@@ -1645,7 +1655,9 @@ local function macro_match(datac,macro,filename)
   if macro.match_debug then
     print('match debug')
   end
-  
+  local sanitized, tagged_sanitized,matched_to,functional_macros,sanitized_param_info
+  functional_macros = macro.semantic_function~=nil or type(macro.body)=='function'
+  if functional_macros then sanitized = {} tagged_sanitized={} end
   --reading into parameters in the head
   --if they already have values, then verifying that they match
   local match = function(match_fn) -- read_to, read_match_to or read_match_to_no_commas
@@ -1654,6 +1666,7 @@ local function macro_match(datac,macro,filename)
       if nullp(caddr(pos)) then my_err (cadr(pos), "match until must have a token after it") end
       if macro_params[caddr(pos).macro_token] then my_err (caddr(pos), "match until must end with a constant token") end
       --success, end token (the one targetted), number of tokens matched including final
+      matched_to = caddr(pos).macro_token
       local succ, nc, inc = match_fn(c,caddr(pos).macro_token)
       if not succ then return false end
 --      print("match succeeded, inc =",inc)
@@ -1685,9 +1698,13 @@ local function macro_match(datac,macro,filename)
   
   while not nullp(pos) do --head
     if car(pos).macro_token==car(c).macro_token then
+      if functional_macros then 
+        table.insert(sanitized,car(c).macro_token) 
+        table.insert(tagged_sanitized,{tag='literal',car(c).macro_token}) 
+      end
       pos=cdr(pos)
       c=cdr(c)
-    elseif car(pos).macro_token=='@end' and nullp(c) then 
+    elseif car(pos).macro_token=='@end' and nullp(c) then --???{}{}{}
       pos=cdr(pos)
     elseif macro_params[car(pos).macro_token] then
       local param_type = macro_params[car(pos).macro_token]
@@ -1697,6 +1714,10 @@ local function macro_match(datac,macro,filename)
       end
       -- Already checked that the next is an Id
       if param_type=='param' then
+        if functional_macros then 
+          table.insert(sanitized,car(c).macro_token) 
+          table.insert(tagged_sanitized,{tag=param_type,name=param_name,car(c).macro_token}) 
+        end
         if param_info[param_name].value then -- prolog style equality matching
           if param_info[param_name].value~=car(c).macro_token then 
             return false,datac 
@@ -1708,25 +1729,40 @@ local function macro_match(datac,macro,filename)
 --          print(cadr(pos).macro_token,"set to",car(c).macro_token)
         end
         pos=cddr(pos)
-      elseif macro_params[car(pos).macro_token]=='param until' then
-        if not match(read_to) then 
-          return false,datac 
+      else
+        if macro_params[car(pos).macro_token]=='param until' then
+          if not match(read_to) then 
+            return false,datac 
+          end
+        elseif macro_params[car(pos).macro_token]=='params' then
+          if not match(read_match_to) then 
+            return false,datac 
+          end
+        elseif macro_params[car(pos).macro_token]=='optional params' then
+          if not match(optional_read_match_to) then 
+            return false,datac 
+          end
+        elseif macro_params[car(pos).macro_token]=='param match until' then
+          if not match(read_match_to_no_commas) then 
+            return false,datac 
+          end
+        elseif macro_params[car(pos).macro_token]=='generate var' then 
+          my_err (car(pos), "can't have a generate variable in a macro head")
+        else --unused so far
         end
-      elseif macro_params[car(pos).macro_token]=='params' then
-        if not match(read_match_to) then 
-          return false,datac 
+        if functional_macros then 
+          local r=param_info[param_name].value 
+          local tagged={tag=param_type,name=param_name}
+          while not nullp(r) do
+            table.insert(sanitized,car(r).macro_token) 
+            table.insert(tagged,car(r).macro_token) 
+            r=cdr(r)
+          end
+          table.insert(tagged_sanitized,tagged) 
+          table.insert(sanitized,matched_to)
+          table.insert(tagged_sanitized,{tag='literal', matched_to}) 
+          
         end
-      elseif macro_params[car(pos).macro_token]=='optional params' then
-        if not match(optional_read_match_to) then 
-          return false,datac 
-        end
-      elseif macro_params[car(pos).macro_token]=='param match until' then
-        if not match(read_match_to_no_commas) then 
-          return false,datac 
-        end
-      elseif macro_params[car(pos).macro_token]=='generate var' then 
-        my_err (car(pos), "can't have a generate variable in a macro head")
-      else --unused so far
       end
       c=cdr(c)
     else
@@ -1830,15 +1866,31 @@ local function macro_match(datac,macro,filename)
       end
     end
   end
+  if functional_macros then
+    sanitized_param_info = { }
+    for k,v in pairs(param_info) do
+      sanitized_param_info[k]={type=v.type, value = list_to_stripped_array(v.value)}
+    end
+  end
+  
   if macro.semantic_function then
-    local sem_return = macro.semantic_function(param_info,c)
+    local sem_return = macro.semantic_function(sanitized,tagged_sanitized,sanitized_param_info)
       if not sem_return then return false,datac end
       if sem_return~=true then return true,sem_return end
   end
-  if macro.body then
-    if type(macro.body) == 'function' then
-      local body_ret,b,c = macro.body(param_info,c,do_body)
+  if macro.internal_function_body then
+      local body_ret,b,c = macro.internal_function_body(param_info,c,do_body)
       if body_ret then return body_ret,b,c end
+      return false,datac 
+  elseif macro.body then
+    if type(macro.body) == 'function' then
+      --{}{}{} sanitize
+      
+      local body_ret = macro.body(sanitized,tagged_sanitized,sanitized_param_info)
+      if body_ret then --return true, dest, start
+        return true,c,splice_simple(datac,string_to_source_array(body_ret,filename,my_err),c)
+        --return true,array_to_list(string_to_source_array(body_ret,filename,my_err),c),c
+      end
       return false,datac 
     else
       return do_body(macro.body,c)
