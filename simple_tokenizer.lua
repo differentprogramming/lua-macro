@@ -17,6 +17,10 @@ local special_token_sets={}
 local special_token_lists={}
 
 local function add_special_token(s)
+  print("adding token:",s)
+  if s==nil then
+    error("internal error, defining nil token")
+  end
   for a=1,#s do
     if not special_token_sets[a] then special_token_sets[a]={} end
   end
