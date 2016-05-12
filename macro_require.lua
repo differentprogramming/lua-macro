@@ -1880,9 +1880,9 @@ local function macro_match(datac,macro,filename)
     sanitized_param_info = { }
     for k,v in pairs(param_info) do
       if v.type == 'param' then 
-        sanitized_param_info[k]={type=v.type, value = {v.value.macro_token} }
+        sanitized_param_info[k]={v.value.macro_token}
       else
-        sanitized_param_info[k]={type=v.type, value = list_to_stripped_array(v.value)}
+        sanitized_param_info[k]= list_to_stripped_array(v.value)
       end
     end
   end
