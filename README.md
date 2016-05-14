@@ -66,7 +66,7 @@ If you run it, it prints `“assertion 3 + 3 == 3 + 4 failed, returning 6 and 7�
 
 If you wanted to do this the pure lua way then you’d have to load the macro before you load any file that uses it, in which case your files could look like *[boot_macro.lua]:*
 ```lua
-	 local macro_system = require 'macro_require' --the assignment isn’t necessary, since macro_require exports it as a global
+local macro_system = require 'macro_require' --the assignment isn’t necessary, since macro_require exports it as a global
  macro_system.add {
    head='assert_compared(?op,?a,?b)',
    body=[[ if not(?a ?op ?b) then 
