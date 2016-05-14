@@ -16,8 +16,8 @@ There are two modes for defining a macro:
 
 1. normal lua.  You define macros by passing tables describing them to an add_macro function, then you load or require the file that you want processed.  
 2. macros inline with the code being processed:  
-* In that case, you use C preprocessor like line markings.  @macro at the beginning of a line or other preprocessor directives.
-* In this case the file is processed in two passes (actually 3 but who is counting). All of the preprocessor directives are processed before the other content of the file.  Macros don’t have to be defined before they are used.
+   In that case, you use C preprocessor like line markings.  @macro at the beginning of a line or other preprocessor directives.
+   In this case the file is processed in two passes (actually 3 but who is counting). All of the preprocessor directives are processed before the other content of the file.  Macros don’t have to be defined before they are used.
 As an example I’m going to show the same simple macro in both styles
 First a macro in regular lua style. 
 ```lua 
