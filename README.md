@@ -44,8 +44,8 @@ Unless you’re depending on Zerobrane integration which isn’t complete yet, y
 
 This file needs `require 'macro_require'` before loading the file.  Macro require patches “require” so that you include a macro file through require.  You have to name your macro files specially with “.pp.lua” so that “require” knows to process them through the macro processor.  So you could name your file “equal_assert.pp.lua” then require it with  `require 'equal_assert'`.
 
-So to make it concrete you’ll need two files, the driver file that bootstraps the macro system [for instancs call it boot_macro.lua]:
-	```lua
+So to make it concrete you’ll need two files, the driver file that bootstraps the macro system [for instance call it boot_macro.lua]:
+```lua
  require 'macro_require'
  
  require 'assert_test'
