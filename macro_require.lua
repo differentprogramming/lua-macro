@@ -666,12 +666,12 @@ local function string_to_source_array(str,filename,err_handler)
       local ttype = source[meaningful[a]].type
       local value
       local token=source[meaningful[a]]
-      if ttype=='String' then
+--      if ttype=='String' then
         --we don't want to find escape sequences in our strings, so we use the processed version
-        value='[=======['..source[meaningful[a]].processed..']=======]'
-      else
+--        value='[=======['..source[meaningful[a]].processed..']=======]'
+--      else
         value=source[meaningful[a]].value
-      end
+--      end
       local dy=token.from_line-prevy
       prevy=token.to_line
       local dx,first
@@ -1614,10 +1614,35 @@ add_macro({ head='?1a @@ ?1b',
 
 local tostring_body = array_to_list(string_to_source_array('"dummy" ?a'))
 
+tostring_list={
+  '=',
+  '==',
+  '===',
+  '====',
+  '=====',
+  '======',
+  '=======',
+  '========',
+  '==========',
+  '===========',
+  '============',
+  '=============',
+  '==============',
+  '===============',
+}
+to_string_counter=0
+local function next_to_string_delimiters()
+  local n=to_string_counter+1
+  to_string_counter=(to_string_counter+1)%(#tostring_list)
+  return '['.. tostring_list[n]..'[' ,']'.. tostring_list[n]..']'  
+end
+
+
 add_macro({ head='@tostring(?,a)',
     internal_function_body= function(param_info,c,do_body)
       local ok,s,ret,n = do_body(tostring_body,c)
-      local dest = {'[======['}
+      local open_del,close_del = next_to_string_delimiters()
+      local dest = {open_del}
       
       if ok then
         ret[2]=token_copy(ret[2])
@@ -1632,7 +1657,7 @@ add_macro({ head='@tostring(?,a)',
           table.insert(dest,car(l).macro_token)
           l=cdr(l)
         end
-        table.insert(dest,']======]')
+        table.insert(dest,close_del)
         
         
         car(ret).macro_token = table.concat(dest,'')
