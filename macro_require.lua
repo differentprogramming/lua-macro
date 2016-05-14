@@ -1665,7 +1665,7 @@ local function macro_match(datac,macro,filename)
   if macro.match_debug then
     print('match debug')
   end
-  local sanitized, tagged_sanitized,matched_to,functional_macros,sanitized_param_info
+  local sanitized, tagged_sanitized,matched_to,functional_macros,sanitized_param_info,simple_param_info,functional_macro_data
   functional_macros = macro.semantic_function~=nil or type(macro.body)=='function'
   if functional_macros then sanitized = {} tagged_sanitized={} end
   --reading into parameters in the head
@@ -1860,6 +1860,31 @@ local function macro_match(datac,macro,filename)
     --
     return true,tc,splice(datac,dest,tc,f)
   end --function do_body
+  
+  if functional_macros then
+    sanitized_param_info = { }
+    simple_param_info = {}
+    for k,v in pairs(param_info) do
+      if v.type == 'param' then 
+        sanitized_param_info[k]={v.value.macro_token}
+        simple_param_info[k]=v.value.macro_token
+      else
+        sanitized_param_info[k]= list_to_stripped_array(v.value)
+        simple_param_info[k]= table.concat(sanitized_param_info[k],' ')
+      end
+    end
+    functional_macro_data = {params = simple_param_info, 
+      param_lists = sanitized_param_info,
+      source = sanitized,
+      tagged_source = tagged_sanitized
+      }
+  end
+
+  if macro.semantic_function then
+    local sem_return = macro.semantic_function(functional_macro_data)
+      if not sem_return then return false,datac end
+  end
+  function do_sections()
   if macro.sections then --{}{}{} ignore sections for now
     for section,m in pairs(macro.sections) do
       if type(m) == 'function' then
@@ -1870,28 +1895,21 @@ local function macro_match(datac,macro,filename)
         if not sublist then
               my_err(cadr(start),'no section '..cadr(start).token.processed..' in file '..filename..' found.')
         end 
-        m(param_info,sublist[2][3])
+               
+       local body_ret_s = m(functional_macro_data)
+      if body_ret_s then --return true, dest, start
+        splice_simple(datac,string_to_source_array(body_ret_s,filename,my_err),sublist[2][3])
+        --return true,array_to_list(string_to_source_array(body_ret,filename,my_err),c),c
+      end
+     
       else
           do_body(m,section,filename)
       end
     end
   end
-  if functional_macros then
-    sanitized_param_info = { }
-    for k,v in pairs(param_info) do
-      if v.type == 'param' then 
-        sanitized_param_info[k]={v.value.macro_token}
-      else
-        sanitized_param_info[k]= list_to_stripped_array(v.value)
-      end
-    end
   end
   
-  if macro.semantic_function then
-    local sem_return = macro.semantic_function(sanitized,tagged_sanitized,sanitized_param_info)
-      if not sem_return then return false,datac end
-      if sem_return~=true then return true,sem_return end
-  end
+  
   if macro.internal_function_body then
       local body_ret,b,c = macro.internal_function_body(param_info,c,do_body)
       if body_ret then return body_ret,b,c end
@@ -1900,13 +1918,15 @@ local function macro_match(datac,macro,filename)
     if type(macro.body) == 'function' then
       --{}{}{} sanitize
       
-      local body_ret = macro.body(sanitized,tagged_sanitized,sanitized_param_info)
+      local body_ret = macro.body(functional_macro_data)
       if body_ret then --return true, dest, start
+        do_sections()
         return true,c,splice_simple(datac,string_to_source_array(body_ret,filename,my_err),c)
         --return true,array_to_list(string_to_source_array(body_ret,filename,my_err),c),c
       end
       return false,datac 
     else
+      do_sections()
       return do_body(macro.body,c)
     end
   end     
