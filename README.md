@@ -5,7 +5,7 @@
 
 I haven’t decided what to name this system, I should come up with a name that shows up in google searches as distinct from the many similar systems…
 
-The features of this Lua preprocessor:
+The features of this Lua preprocessor:  
 1. It’s a relatively simple preprocessor, providing both template based substitution similar to scheme and procedural substitution similar to Common Lisp.  
 2. It allows a single macro to generate code in multiple places at one time, helping with one of the most annoying problems with boilerplate code.   
 3. The processor runs in pure lua and can export preprocessed files that are pure lua, facilitating compiling them for embedding.  The resulting code doesn’t need to include the macro library.  
