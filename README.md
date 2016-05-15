@@ -95,6 +95,34 @@ The system has the following preprocessor directives
 * `@section 'sectionname'` – specify inclusion points for macros that generate code non-locally.  
 
 [macro directives that appear in OTHER places than the beginning of a line]:
-* `@apply` {[macro definitions]} – define and apply local macros inside of another macro.lua  
-* `@tostring(expression)`- turn parameter or macro expansion into a string. Especially useful for print out a macro to see how it expands.  Note this system expands from right to left, so that parameters are fully expanded before they’re passed to other macros.  
-* `@@` - *Concatinate tokens.*  The same as ## in the C preprocessor.
+* `@apply` {[macro definitions]} – define and apply local macros inside of another macro.lua. This directive can only appear inside a macro body.
+`@tostring(expression)`- turn parameter or macro expansion into a string. Especially useful for print out a macro to see how it expands.  Note this system expands from right to left, so that parameters are fully expanded before they’re passed to other macros.  
+`@@` - *Concatinate tokens.*  The same as ## in the C preprocessor.
+
+##The Anatomy of Macros
+
+Macros are templates that, wherever they match in the source that source is replaced with something else, and text elsewhere can be generated too.
+A *head* is a template describing the text that has to be matched to, it is a list of parameters with literal text between these parameters. 
+The following kind of parameters exist:
+* those preceded by `?`: For a single expression or statement.  These must be followed by a literal token as a delimeter and they match until they hit that token with the following caveats:  
+1) the matcher is smart enough to know that ‘(‘ must have ‘)’ to match it, ‘[‘ matches ‘]’ and ‘{‘ matches ‘}’ when it sees one of those while scanning it will automatcially keep scanning till it finds the match, and won’t stop even for the token it’s looking for. It also knows about Lua statements, it knows that `if` ends in `end` that `for` is followed by `do` and then `end` etc.  It will skip over statements as well. *Third of all it WILL stop for a comma or a semicolon.*  If it stops for one of those early and the delimiter it’s looking for is not what it stopped on then the match fails and that macro won’t be substituted.
+* those preceded by `?,`:  For multiple expressions or statements.  The same as `?` but in this case it is happy to skip over commas and semicolons.
+* those preceded by `??,`: For multiple expressions or statements or *no expression or statement.* The same as `?,` but won’t fail if it finds NOTHING before the delimiter.
+* those preceded by `?...`: Dumb matching till literal.  This one knows nothing about lua syntax and simply matches tokens till it sees the literal that came after it in the head.   It doesn’t treat parens specially or statements. 
+* finally one with different rules `?1`:  Match *one* token.  In this case it’s not necessary to have a literal token as a delimiter after or before, it knows to take exactly one token and stop.
+
+Note, if the same parameter appears more than once in the head, it’s used as a “guard”.  If both inputs aren’t the same then the match fails.
+
+A *body* describes what the text that matches the head will be replaced with.  There are two kinds of bodies, a body can be a template like the head or it can be a function.
+
+In a templated body, parameters are marked with a `?` in front of them.  There is also a new kind of variable that doesn’t exist in the head.  If you mark a name with `%` instead of `?` then it names a local variable instead of naming an input parameter.  For each local a unique name is generated, this solves the problem of “variable capture” and makes macros “hygienic”.   For people not familiar with the problem, this will require some explanation, which I will give later.  Note that variable names and parameter names are taken from the same namespace, it’s an error to try to reuse the name of a parameter as the name of a variable.
+
+Macros have the following sections (all are optional except *head* and *body):* 
+
+`head` - the head is a string listing input parameters and the literal tokens between them.  This is what the text has to match in order to trigger the macro.
+`body` - the body can either be a string or a function, th
+if it’s a string it’s a list of literal tokens, input parameters, 
+`new_tokens`
+`sections`
+`semantic_function`
+
