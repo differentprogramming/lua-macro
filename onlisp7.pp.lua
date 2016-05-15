@@ -3,8 +3,8 @@
 @macro { 
   new_tokens = {'_nil!'}, 
   head = '_nil! ?1a', 
-  body = function (tokens, grouped, params)
-    return params.a[1] .. '=nil'
+  body = function (data)
+    return data.params.a .. '=nil'
     end
   } 
   
@@ -18,9 +18,9 @@
             }
   @macro { 
     head = '_nif ?exp neg: ??,neg zero: ??,zero pos: ??,pos end',
-    body = function (tokens, grouped, params)
+    body = function (data)
       local result = macro_system.gensym()
-    return  result..'='..table.concat(params.exp,' ').. '\nif '..result..'<0 then '..table.concat(params.neg,' ')..'elseif '..result..'>0 then '..table.concat(params.pos,' ')..'else '..table.concat(params.zero,' ')..' end'
+    return  result..'='..data.params.exp.. '\nif '..result..'<0 then '..data.params.neg..'elseif '..result..'>0 then '..data.params.pos..'else '..data.params.zero..' end'
     end
             }
   local a,b = 'a','b'
