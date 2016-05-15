@@ -131,6 +131,8 @@ local D=55
 
 log(A..B,C,NOTDEFINED,D)
 ```
+which should return
+`A .. B=hello there C=Mom NOTDEFINED=nil D=55`
 
 A *body* describes what the text that matches the head will be replaced with.  There are two kinds of bodies, a body can be a template like the head or it can be a function.
 
