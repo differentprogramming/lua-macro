@@ -113,6 +113,25 @@ The following kind of parameters exist:
 
 Note, if the same parameter appears more than once in the head, it’s used as a “guard”.  If both inputs aren’t the same then the match fails.
 
+Here is an example of using ?, to destructure input and using @tostring to report the literals of the expression being logged.
+```lua
+@macro { 
+  head='log(?a,?,b)',
+  body=[[io.stderr:write(@tostring(?a),'=',tostring(?a),' ') log(?b)]]
+}
+@macro { 
+  head='log(?a)',
+  body=[[io.stderr:write(@tostring(?a),'=',tostring(?a),'\n')]]
+}
+
+local A='hello'
+local B=' there'
+local C='Mom'
+local D=55
+
+log(A..B,C,NOTDEFINED,D)
+```
+
 A *body* describes what the text that matches the head will be replaced with.  There are two kinds of bodies, a body can be a template like the head or it can be a function.
 
 In a templated body, parameters are marked with a `?` in front of them.  There is also a new kind of variable that doesn’t exist in the head.  If you mark a name with `%` instead of `?` then it names a local variable instead of naming an input parameter.  For each local a unique name is generated, this solves the problem of “variable capture” and makes macros “hygienic”.   For people not familiar with the problem, this will require some explanation, which I will give later.  Note that variable names and parameter names are taken from the same namespace, it’s an error to try to reuse the name of a parameter as the name of a variable.
