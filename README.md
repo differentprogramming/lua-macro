@@ -113,7 +113,7 @@ The following kind of parameters exist:
 
 Note, if the same parameter appears more than once in the head, it’s used as a “guard”.  If both inputs aren’t the same then the match fails.
 
-Here is an example of using ?, to destructure input and using @tostring to report the literals of the expression being logged.
+Here is an example of using `?,` to destructure input and using `@tostring` to report the literals of the expression being logged.
 ```lua
 @macro { 
   head='log(?a,?,b)',
