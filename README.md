@@ -95,7 +95,7 @@ The system has the following preprocessor directives
 * `@section 'sectionname'` – specify inclusion points for macros that generate code non-locally.  
 
 [macro directives that appear in OTHER places than the beginning of a line]:
-* `@apply` {[macro definitions]} – define and apply local macros inside of another macro.lua. This directive can only appear inside a macro body.
+* `@apply` {[macro definitions]} – define and apply local macros inside of another macro.lua. This directive can only appear inside a macro body.  
 `@tostring(expression)`- turn parameter or macro expansion into a string. Especially useful for print out a macro to see how it expands.  Note this system expands from right to left, so that parameters are fully expanded before they’re passed to other macros.  
 `@@` - *Concatinate tokens.*  The same as ## in the C preprocessor.
 
