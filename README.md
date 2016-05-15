@@ -1,3 +1,5 @@
+*note: state of the code is, still being debugged. Has random logging to std err still on.*
+*There are no showstopper bugs that I'm aware of at the moment.*
 #Lua Preprocessor
 
 I haven’t decided what to name this system, I should come up with a name that shows up in google searches as distinct from the many similar systems…
